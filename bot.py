@@ -17,7 +17,8 @@ from telegram.ext import (
 MODEL = "gpt-5-mini"
 
 client = OpenAI(
-    api_key=os.environ["OPENAI_API_KEY"]
+    api_key=os.environ["OPENAI_API_KEY"],
+    base_url="https://openrouter.ai/api/v1"
 )
 
 DB_NAME = "bud.db"
