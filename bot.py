@@ -39,8 +39,15 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = response.output_text
         await update.message.reply_text(answer)
 
-    except Exception as e:
-        print(f"Ошибка: {e}")
+        except Exception as e:
+        print(f"Ошибка: {type(e).__name__}: {repr(e)}")
+
+        if e.__cause__:
+            print(
+                f"Причина: {type(e.__cause__).__name__}: "
+                f"{repr(e.__cause__)}"
+            )
+
         await update.message.reply_text(
             "Бля, что-то пошло не так. Попробуй написать ещё раз."
         )
