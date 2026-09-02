@@ -39,7 +39,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = response.output_text
         await update.message.reply_text(answer)
 
-        except Exception as e:
+    except Exception as e:
         print(f"Ошибка: {type(e).__name__}: {repr(e)}")
 
         if e.__cause__:
