@@ -14,7 +14,7 @@ from telegram.ext import (
 # НАСТРОЙКИ
 # =========================
 
-MODEL = "gpt-5-mini"
+MODEL = "openrouter/free"
 
 client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
