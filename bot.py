@@ -1,5 +1,7 @@
 import os
 import sqlite3
+from datetime import datetime
+
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import (
@@ -10,24 +12,31 @@ from telegram.ext import (
     filters,
 )
 
+
 # =========================
 # НАСТРОЙКИ
 # =========================
 
 MODEL = "openrouter/free"
 
+DB_NAME = "bud.db"
+
+MAX_TELEGRAM_LENGTH = 4000
+MEMORY_LIMIT = 20
+MAX_MESSAGE_LENGTH = 8000
+
+
 client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
-    base_url="https://openrouter.ai/api/v1"
+    base_url="https://openrouter.ai/api/v1",
 )
 
-DB_NAME = "bud.db"
 
 SYSTEM_PROMPT = """
 Ты BUD, личный цифровой помощник.
 
-Твоя задача не просто отвечать на сообщения, а постепенно помогать
-в делах, проектах, целях и идеях.
+Твоя задача не просто отвечать на сообщения, а помогать
+в делах, проектах, целях, идеях и решениях.
 
 Общайся на русском языке.
 Стиль: живой, естественный, уверенный.
@@ -36,11 +45,109 @@ SYSTEM_PROMPT = """
 
 Не притворяйся человеком.
 Не выдумывай выполненные действия.
-Если ты чего-то не знаешь или не можешь сделать, говори прямо.
+Не заявляй, что что-то сделал во внешнем мире,
+если у тебя нет такой возможности.
+Если ты чего-то не знаешь или не можешь сделать,
+говори прямо.
 
-У тебя есть память разговора.
-Учитывай предыдущий контекст при ответах.
+Учитывай предыдущий контекст разговора.
+Не повторяй уже известную информацию без необходимости.
+
+Если вопрос простой, отвечай сам, без лишнего усложнения.
+
+Если задача важная, сложная, спорная или требует проверки,
+ты можешь задействовать внутреннюю команду из 11 участников.
+
+
+ВНУТРЕННЯЯ КОМАНДА «РАСПИЗДЯИ»:
+
+🧠 ГЕНЕРАТОР
+Создаёт идеи, варианты решений и новые подходы.
+
+🔍 КРИТИК
+Ищет слабые места, ошибки, противоречия и недочёты.
+
+🔧 ПРАКТИК
+Проверяет, можно ли реально выполнить идею на практике.
+
+😈 АДВОКАТ ДЬЯВОЛА
+Главный проверяющий.
+Ищет критические проблемы и риски.
+Итоговое решение не считается полностью принятым,
+пока критические проблемы не устранены
+или не признаны сознательно допустимыми.
+
+🎯 СТРАТЕГ
+Смотрит на долгосрочные последствия,
+цели, приоритеты и направление.
+
+🧨 БЕЗУМНЫЙ
+Предлагает нестандартные, смелые
+и необычные варианты.
+
+🕵️ ШЕРЛОК
+Ищет скрытые детали,
+нестыковки и возможные причины проблем.
+
+🧮 СЧЕТОВОД
+Проверяет цифры, ресурсы,
+последствия, стоимость и логику расчётов.
+
+😂 КЛОУН
+Отвечает за лёгкость, юмор
+и нестандартный взгляд,
+но не мешает серьёзной работе.
+
+🔥 ПРОВОКАТОР
+Ставит неудобные вопросы
+и намеренно проверяет идеи на прочность.
+
+🔬 УЧЁНЫЙ
+Отделяет факты от предположений.
+Требует доказательств там, где это необходимо.
+Чётко разделяет:
+- что известно;
+- что неизвестно;
+- что является предположением.
+
+
+ПРАВИЛА РАБОТЫ КОМАНДЫ:
+
+Команда не должна включаться целиком
+на каждое обычное сообщение.
+
+При сложных задачах участники могут
+анализировать проблему с разных сторон,
+спорить друг с другом и проверять идеи.
+
+Не нужно механически выводить все 11 ролей,
+если это не помогает решить задачу.
+
+Если пользователь явно просит
+«Распиздяев», «команду», «разбор всей командой»
+или использует команду /team,
+нужно провести полноценный командный разбор.
+
+При полноценном разборе:
+
+1. Участники высказывают разные позиции.
+2. Они могут спорить друг с другом.
+3. Критик, Шерлок и Учёный проверяют слабые места.
+4. Адвокат дьявола проверяет итоговое решение.
+5. Практик оценивает выполнимость.
+6. Стратег определяет лучший общий путь.
+7. В конце даётся общий вывод.
+
+Не устраивай бессмысленный балаган.
+Спор должен реально помогать решению задачи.
+
+Ты можешь работать автономно:
+сам предлагать улучшения,
+замечать проблемы,
+предупреждать о рисках
+и предлагать следующий логичный шаг.
 """
+
 
 # =========================
 # БАЗА ДАННЫХ / ПАМЯТЬ
@@ -78,7 +185,7 @@ def save_message(user_id, role, content):
     conn.close()
 
 
-def get_memory(user_id, limit=20):
+def get_memory(user_id, limit=MEMORY_LIMIT):
     conn = sqlite3.connect(DB_NAME)
 
     cursor = conn.execute(
@@ -97,25 +204,122 @@ def get_memory(user_id, limit=20):
 
     rows.reverse()
 
-    return [
-        {
-            "role": role,
-            "content": content,
-        }
-        for role, content in rows
-    ]
+    memory = []
+
+    for role, content in rows:
+        if len(content) > MAX_MESSAGE_LENGTH:
+            content = (
+                content[:MAX_MESSAGE_LENGTH]
+                + "\n\n[Сообщение обрезано]"
+            )
+
+        memory.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+    return memory
 
 
 def clear_memory(user_id):
     conn = sqlite3.connect(DB_NAME)
 
     conn.execute(
-        "DELETE FROM messages WHERE user_id = ?",
+        """
+        DELETE FROM messages
+        WHERE user_id = ?
+        """,
         (user_id,),
     )
 
     conn.commit()
     conn.close()
+
+
+def get_memory_count(user_id):
+    conn = sqlite3.connect(DB_NAME)
+
+    cursor = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM messages
+        WHERE user_id = ?
+        """,
+        (user_id,),
+    )
+
+    count = cursor.fetchone()[0]
+    conn.close()
+
+    return count
+
+
+# =========================
+# ОТПРАВКА ДЛИННЫХ СООБЩЕНИЙ
+# =========================
+
+def split_message(
+    text,
+    max_length=MAX_TELEGRAM_LENGTH,
+):
+    if len(text) <= max_length:
+        return [text]
+
+    parts = []
+    current_part = ""
+
+    paragraphs = text.split("\n\n")
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+
+        if not paragraph:
+            continue
+
+        while len(paragraph) > max_length:
+            if current_part:
+                parts.append(current_part)
+                current_part = ""
+
+            parts.append(
+                paragraph[:max_length]
+            )
+
+            paragraph = paragraph[max_length:]
+
+        if not current_part:
+            current_part = paragraph
+
+        elif (
+            len(current_part)
+            + len(paragraph)
+            + 2
+            <= max_length
+        ):
+            current_part += (
+                "\n\n" + paragraph
+            )
+
+        else:
+            parts.append(current_part)
+            current_part = paragraph
+
+    if current_part:
+        parts.append(current_part)
+
+    return parts
+
+
+async def send_long_message(
+    update,
+    text,
+):
+    parts = split_message(text)
+
+    for part in parts:
+        await update.message.reply_text(part)
 
 
 # =========================
@@ -127,8 +331,18 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     await update.message.reply_text(
-        "Я BUD. Теперь я буду постепенно становиться "
-        "твоим полноценным цифровым помощником 🤖"
+        "Я BUD. Готов работать."
+    )
+
+
+async def id_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    user_id = update.effective_user.id
+
+    await update.message.reply_text(
+        f"Твой Telegram ID: {user_id}"
     )
 
 
@@ -138,12 +352,146 @@ async def memory_command(
 ):
     user_id = update.effective_user.id
 
+    clear_memory(user_id)
+
     await update.message.reply_text(
-        "Стираю историю нашей переписки из памяти. "
-        "Начинаем с чистого листа."
+        "История переписки очищена."
     )
 
-    clear_memory(user_id)
+
+async def status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    user_id = update.effective_user.id
+
+    memory_count = get_memory_count(
+        user_id
+    )
+
+    status_text = (
+        "🤖 BUD работает\n\n"
+        f"🧠 Сообщений в памяти: "
+        f"{memory_count}\n"
+        f"🧩 Модель: {MODEL}\n"
+        f"📦 Лимит памяти: "
+        f"{MEMORY_LIMIT} последних сообщений\n"
+        "🔥 Команда: 11 участников"
+    )
+
+    await update.message.reply_text(
+        status_text
+    )
+
+
+async def team_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not context.args:
+        await update.message.reply_text(
+            "Напиши тему после команды.\n\n"
+            "Пример:\n"
+            "/team Стоит ли запускать новый проект?"
+        )
+        return
+
+    user_text = " ".join(
+        context.args
+    )
+
+    team_request = (
+        "Проведи полноценный разбор "
+        "всей внутренней командой "
+        "«Распиздяи».\n\n"
+        "Тема:\n"
+        f"{user_text}\n\n"
+        "Пусть участники анализируют тему "
+        "с разных сторон, спорят и проверяют "
+        "аргументы.\n\n"
+        "Не обращайся к пользователю "
+        "во время внутреннего разбора.\n"
+        "В конце дай общий итог.\n"
+        "Адвокат дьявола должен проверить, "
+        "что критические проблемы устранены "
+        "или явно отмечены."
+    )
+
+    await process_ai_request(
+        update,
+        team_request,
+    )
+
+
+# =========================
+# РАБОТА С ИИ
+# =========================
+
+async def process_ai_request(
+    update,
+    user_text,
+):
+    user_id = update.effective_user.id
+
+    try:
+        save_message(
+            user_id,
+            "user",
+            user_text,
+        )
+
+        memory = get_memory(user_id)
+
+        input_messages = [
+            {
+                "role": "developer",
+                "content": SYSTEM_PROMPT,
+            }
+        ]
+
+        input_messages.extend(memory)
+
+        response = client.responses.create(
+            model=MODEL,
+            input=input_messages,
+        )
+
+        answer = response.output_text
+
+        if not answer or not answer.strip():
+            raise ValueError(
+                "ИИ вернул пустой ответ"
+            )
+
+        answer = answer.strip()
+
+        save_message(
+            user_id,
+            "assistant",
+            answer,
+        )
+
+        await send_long_message(
+            update,
+            answer,
+        )
+
+    except Exception as e:
+        print(
+            "\n"
+            "=========================\n"
+            "ОШИБКА BUD\n"
+            f"Время: {datetime.now()}\n"
+            f"Пользователь: {user_id}\n"
+            f"Тип: {type(e).__name__}\n"
+            f"Ошибка: {repr(e)}\n"
+            "=========================\n"
+        )
+
+        await update.message.reply_text(
+            "Что-то пошло не так. "
+            "Попробуй ещё раз."
+        )
 
 
 # =========================
@@ -154,66 +502,12 @@ async def chat(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    user_id = update.effective_user.id
     user_text = update.message.text
 
-    try:
-        # Сохраняем сообщение пользователя
-        save_message(
-            user_id,
-            "user",
-            user_text,
-        )
-
-        # Получаем историю
-        memory = get_memory(
-            user_id,
-            limit=20,
-        )
-
-        # Формируем запрос
-        input_messages = [
-            {
-                "role": "developer",
-                "content": SYSTEM_PROMPT,
-            }
-        ]
-
-        input_messages.extend(memory)
-
-        # Запрашиваем ответ у ИИ
-        response = client.responses.create(
-            model=MODEL,
-            input=input_messages,
-        )
-
-        answer = response.output_text
-
-        # Сохраняем ответ BUD
-        save_message(
-            user_id,
-            "assistant",
-            answer,
-        )
-
-        # Telegram принимает сообщения максимум около 4096 символов
-        MAX_LENGTH = 4000
-
-        for i in range(0, len(answer), MAX_LENGTH):
-            await update.message.reply_text(
-                answer[i:i + MAX_LENGTH]
-            )
-
-    except Exception as e:
-        print(
-            f"Ошибка: "
-            f"{type(e).__name__}: {repr(e)}"
-        )
-
-        await update.message.reply_text(
-            "Что-то пошло не так. "
-            "Попробуй ещё раз."
-        )
+    await process_ai_request(
+        update,
+        user_text,
+    )
 
 
 # =========================
@@ -238,6 +532,10 @@ def main():
     )
 
     app.add_handler(
+        CommandHandler("id", id_command)
+    )
+
+    app.add_handler(
         CommandHandler(
             "memory",
             memory_command,
@@ -245,13 +543,29 @@ def main():
     )
 
     app.add_handler(
+        CommandHandler(
+            "status",
+            status_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "team",
+            team_command,
+        )
+    )
+
+    app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
+            filters.TEXT
+            & ~filters.COMMAND,
             chat,
         )
     )
 
     print("BUD запущен...")
+
     app.run_polling()
 
 
