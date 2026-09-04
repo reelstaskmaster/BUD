@@ -24,10 +24,10 @@ client = OpenAI(
 DB_NAME = "bud.db"
 
 SYSTEM_PROMPT = """
-Ты BUD, личный цифровой помощник Андрея.
+Ты BUD, личный цифровой помощник .
 
 Твоя задача не просто отвечать на сообщения, а постепенно помогать
-Андрею в его делах, проектах, целях и идеях.
+в его делах, проектах, целях и идеях.
 
 Общайся на русском языке.
 Стиль: живой, естественный, уверенный.
@@ -197,7 +197,13 @@ async def chat(
             answer,
         )
 
-        await update.message.reply_text(answer)
+        # Telegram принимает сообщения максимум около 4096 символов
+MAX_LENGTH = 4000
+
+for i in range(0, len(answer), MAX_LENGTH):
+    await update.message.reply_text(
+        answer[i:i + MAX_LENGTH]
+    )
 
     except Exception as e:
         print(
@@ -206,7 +212,7 @@ async def chat(
         )
 
         await update.message.reply_text(
-            "Бля, что-то пошло не так. "
+            "Что-то пошло не так. "
             "Попробуй ещё раз."
         )
 
