@@ -19,6 +19,8 @@ from telegram.ext import (
 
 MODEL = "openrouter/free"
 
+ALLOWED_USER_ID = 411726428
+
 DB_NAME = "bud.db"
 
 MAX_TELEGRAM_LENGTH = 4000
@@ -150,6 +152,17 @@ SYSTEM_PROMPT = """
 
 
 # =========================
+# ПРОВЕРКА ДОСТУПА
+# =========================
+
+def is_allowed(update: Update):
+    return (
+        update.effective_user is not None
+        and update.effective_user.id == ALLOWED_USER_ID
+    )
+
+
+# =========================
 # БАЗА ДАННЫХ / ПАМЯТЬ
 # =========================
 
@@ -251,6 +264,7 @@ def get_memory_count(user_id):
     )
 
     count = cursor.fetchone()[0]
+
     conn.close()
 
     return count
@@ -330,19 +344,11 @@ async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not is_allowed(update):
+        return
+
     await update.message.reply_text(
         "Я BUD. Готов работать."
-    )
-
-
-async def id_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    user_id = update.effective_user.id
-
-    await update.message.reply_text(
-        f"Твой Telegram ID: {user_id}"
     )
 
 
@@ -350,6 +356,9 @@ async def memory_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not is_allowed(update):
+        return
+
     user_id = update.effective_user.id
 
     clear_memory(user_id)
@@ -363,20 +372,20 @@ async def status_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not is_allowed(update):
+        return
+
     user_id = update.effective_user.id
 
-    memory_count = get_memory_count(
-        user_id
-    )
+    memory_count = get_memory_count(user_id)
 
     status_text = (
         "🤖 BUD работает\n\n"
-        f"🧠 Сообщений в памяти: "
-        f"{memory_count}\n"
+        f"🧠 Сообщений в памяти: {memory_count}\n"
         f"🧩 Модель: {MODEL}\n"
-        f"📦 Лимит памяти: "
-        f"{MEMORY_LIMIT} последних сообщений\n"
-        "🔥 Команда: 11 участников"
+        f"📦 Контекст: {MEMORY_LIMIT} последних сообщений\n"
+        "🔥 Команда: 11 участников\n"
+        "🔒 Доступ: закрыт"
     )
 
     await update.message.reply_text(
@@ -388,6 +397,9 @@ async def team_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not is_allowed(update):
+        return
+
     if not context.args:
         await update.message.reply_text(
             "Напиши тему после команды.\n\n"
@@ -396,14 +408,11 @@ async def team_command(
         )
         return
 
-    user_text = " ".join(
-        context.args
-    )
+    user_text = " ".join(context.args)
 
     team_request = (
         "Проведи полноценный разбор "
-        "всей внутренней командой "
-        "«Распиздяи».\n\n"
+        "внутренней командой «Распиздяи».\n\n"
         "Тема:\n"
         f"{user_text}\n\n"
         "Пусть участники анализируют тему "
@@ -431,6 +440,9 @@ async def process_ai_request(
     update,
     user_text,
 ):
+    if not is_allowed(update):
+        return
+
     user_id = update.effective_user.id
 
     try:
@@ -502,7 +514,13 @@ async def chat(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not is_allowed(update):
+        return
+
     user_text = update.message.text
+
+    if not user_text:
+        return
 
     await process_ai_request(
         update,
@@ -529,10 +547,6 @@ def main():
 
     app.add_handler(
         CommandHandler("start", start)
-    )
-
-    app.add_handler(
-        CommandHandler("id", id_command)
     )
 
     app.add_handler(
@@ -564,7 +578,10 @@ def main():
         )
     )
 
-    print("BUD запущен...")
+    print(
+        "BUD запущен. "
+        "Доступ ограничен."
+    )
 
     app.run_polling()
 
