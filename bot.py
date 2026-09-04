@@ -50,15 +50,16 @@ ALLOWED_USER_ID = int(
     )
 )
 
+# Файл базы памяти.
 DB_NAME = "bud.db"
 
 # Сколько последних сообщений
-# стараемся хранить дословно.
-MEMORY_RECENT_MESSAGES = 20
+# храним дословно.
+MEMORY_RECENT_MESSAGES = 50
 
 # При каком количестве сообщений
 # начинаем сжимать старую историю.
-MEMORY_COMPRESS_TRIGGER = 32
+MEMORY_COMPRESS_TRIGGER = 70
 
 # Максимальная длина
 # одного сообщения в базе.
@@ -66,15 +67,10 @@ MAX_MEMORY_MESSAGE_LENGTH = 8000
 
 # Максимальный размер всего контекста,
 # который отправляем модели.
-#
-# Считается в символах.
-# Это не идеальный аналог токенов,
-# но простой предохранитель
-# от бесконечного раздувания истории.
-MAX_CONTEXT_CHARS = 45000
+MAX_CONTEXT_CHARS = 100000
 
 # Максимальная длина сводной памяти.
-MAX_SUMMARY_LENGTH = 12000
+MAX_SUMMARY_LENGTH = 30000
 
 # Лимит Telegram.
 MAX_TELEGRAM_LENGTH = 4000
@@ -1057,10 +1053,6 @@ def build_context_messages(
             }
         )
 
-    # Если контекст стал слишком большим,
-    # удаляем самые старые недавние сообщения,
-    # но сохраняем системный промпт
-    # и сводную память.
     def context_size():
 
         total = 0
@@ -1085,8 +1077,6 @@ def build_context_messages(
         and len(messages) > 3
     ):
 
-        # Удаляем самое старое
-        # обычное сообщение.
         messages.pop(2)
 
     return messages
@@ -1130,9 +1120,6 @@ def ask_model_sync(
 
         return answer
 
-    # Для диагностики логируем,
-    # что ответ был получен,
-    # но текст оказался пустым.
     logger.warning(
         "Модель вернула пустой output_text | "
         "model=%s | response_id=%s | "
@@ -1344,9 +1331,6 @@ async def compress_memory_if_needed(
 
     except Exception:
 
-        # Важно:
-        # если сжатие памяти не удалось,
-        # старые сообщения НЕ удаляем.
         logger.exception(
             "Не удалось сжать память | "
             "user_id=%s",
@@ -1683,8 +1667,7 @@ async def chat(
             )
         )
 
-        # 5. Запрашиваем ИИ
-        # с повторными попытками.
+        # 5. Запрашиваем ИИ.
         answer = (
             await ask_ai_with_retries(
                 messages
