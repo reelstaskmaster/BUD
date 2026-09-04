@@ -2,16 +2,22 @@ import os
 import sqlite3
 import asyncio
 import logging
-import time
 
 from openai import OpenAI
-from telegram import Update
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, TelegramError, Conflict
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -21,32 +27,18 @@ from telegram.ext import (
 # НАСТРОЙКИ
 # =========================
 
-# Основная модель.
-# Можно изменить в Railway через переменную MODEL.
 MODEL = os.getenv(
     "MODEL",
     "openrouter/free",
 )
 
-# Запасная модель.
-# Если основная модель вернула пустой ответ
-# или запрос упал, BUD попробует эту.
-#
-# Если запасную модель не указывать,
-# будет повторная попытка с основной.
 FALLBACK_MODEL = os.getenv(
     "FALLBACK_MODEL",
     MODEL,
 )
 
-# Сколько попыток сделать
-# с каждой моделью.
 MODEL_RETRIES = 2
 
-# Таймаут одного запроса к OpenRouter.
-OPENROUTER_TIMEOUT = 90.0
-
-# Разрешённый Telegram ID.
 ALLOWED_USER_ID = int(
     os.getenv(
         "ALLOWED_USER_ID",
@@ -56,31 +48,16 @@ ALLOWED_USER_ID = int(
 
 DB_NAME = "bud.db"
 
-# Сколько последних сообщений
-# стараемся хранить дословно.
 MEMORY_RECENT_MESSAGES = 20
 
-# При каком количестве сообщений
-# начинаем сжимать старую историю.
 MEMORY_COMPRESS_TRIGGER = 32
 
-# Максимальная длина
-# одного сообщения в базе.
 MAX_MEMORY_MESSAGE_LENGTH = 8000
 
-# Максимальный размер всего контекста,
-# который отправляем модели.
-#
-# Считается в символах.
-# Это не идеальный аналог токенов,
-# но простой предохранитель
-# от бесконечного раздувания истории.
 MAX_CONTEXT_CHARS = 45000
 
-# Максимальная длина сводной памяти.
 MAX_SUMMARY_LENGTH = 12000
 
-# Лимит Telegram.
 MAX_TELEGRAM_LENGTH = 4000
 
 
@@ -100,17 +77,12 @@ logging.basicConfig(
 
 logger = logging.getLogger("BUD")
 
-# Уменьшаем количество технического шума.
 logging.getLogger(
     "httpx"
 ).setLevel(logging.WARNING)
 
 logging.getLogger(
     "httpx2"
-).setLevel(logging.WARNING)
-
-logging.getLogger(
-    "openai"
 ).setLevel(logging.WARNING)
 
 
@@ -135,8 +107,6 @@ client = OpenAI(
     base_url=(
         "https://openrouter.ai/api/v1"
     ),
-    timeout=OPENROUTER_TIMEOUT,
-    max_retries=0,
 )
 
 
@@ -640,6 +610,85 @@ SUMMARY_PROMPT = """
 
 
 # =========================
+# КНОПКИ И МЕНЮ
+# =========================
+
+MENU_TEXT = "🧠 Меню"
+
+BUTTON_CHAT = "💬 Продолжить разговор"
+BUTTON_MEMORY = "🧠 Память"
+BUTTON_TEAM = "👥 Команда BUD"
+BUTTON_PROJECTS = "📋 Что мы делаем"
+BUTTON_SETTINGS = "⚙️ Настройки"
+BUTTON_CLEAR_MEMORY = "🧹 Очистить память"
+
+
+def get_main_keyboard():
+
+    return ReplyKeyboardMarkup(
+        [
+            [
+                BUTTON_CHAT,
+            ],
+            [
+                BUTTON_MEMORY,
+                BUTTON_PROJECTS,
+            ],
+            [
+                BUTTON_TEAM,
+                BUTTON_SETTINGS,
+            ],
+            [
+                BUTTON_CLEAR_MEMORY,
+            ],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder=(
+            "Напиши, что нужно сделать..."
+        ),
+    )
+
+
+def get_start_keyboard():
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🚀 Начать",
+                    callback_data="start_work",
+                ),
+                InlineKeyboardButton(
+                    "🧠 Что ты умеешь",
+                    callback_data="what_can_do",
+                ),
+            ],
+        ]
+    )
+
+
+def get_clear_memory_keyboard():
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🧹 Да, очистить",
+                    callback_data="clear_memory_confirm",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "↩️ Отмена",
+                    callback_data="clear_memory_cancel",
+                ),
+            ],
+        ]
+    )
+
+
+# =========================
 # АНИМАЦИЯ ЗАГРУЗКИ
 # =========================
 
@@ -1121,67 +1170,9 @@ def ask_model_sync(
     model,
 ):
 
-    start_time = time.monotonic()
-
-    logger.info(
-        "Отправляем запрос в OpenRouter | "
-        "model=%s | "
-        "сообщений=%s",
-        model,
-        len(messages),
-    )
-
-    try:
-
-        response = client.responses.create(
-            model=model,
-            input=messages,
-        )
-
-    except Exception as e:
-
-        elapsed = (
-            time.monotonic()
-            - start_time
-        )
-
-        logger.error(
-            "Ошибка запроса к OpenRouter | "
-            "model=%s | "
-            "время=%.2f сек | "
-            "тип=%s | "
-            "ошибка=%r",
-            model,
-            elapsed,
-            type(e).__name__,
-            e,
-        )
-
-        raise
-
-    elapsed = (
-        time.monotonic()
-        - start_time
-    )
-
-    logger.info(
-        "Ответ получен от OpenRouter | "
-        "model=%s | "
-        "время=%.2f сек | "
-        "response_id=%s | "
-        "status=%s",
-        model,
-        elapsed,
-        getattr(
-            response,
-            "id",
-            None,
-        ),
-        getattr(
-            response,
-            "status",
-            None,
-        ),
+    response = client.responses.create(
+        model=model,
+        input=messages,
     )
 
     answer = extract_output_text(
@@ -1190,20 +1181,11 @@ def ask_model_sync(
 
     if answer:
 
-        logger.info(
-            "Текст ответа получен | "
-            "model=%s | "
-            "символов=%s",
-            model,
-            len(answer),
-        )
-
         return answer
 
     logger.warning(
         "Модель вернула пустой output_text | "
-        "model=%s | "
-        "response_id=%s | "
+        "model=%s | response_id=%s | "
         "status=%s",
         model,
         getattr(
@@ -1268,15 +1250,6 @@ async def ask_ai_with_retries(
                     )
                 )
 
-                logger.info(
-                    "Модель успешно ответила | "
-                    "model=%s | "
-                    "попытка=%s/%s",
-                    model,
-                    attempt,
-                    MODEL_RETRIES,
-                )
-
                 return answer
 
             except Exception as e:
@@ -1287,13 +1260,12 @@ async def ask_ai_with_retries(
                     "Неудачный запрос к модели | "
                     "model=%s | "
                     "попытка=%s/%s | "
-                    "тип=%s | "
-                    "ошибка=%r",
+                    "ошибка=%s: %s",
                     model,
                     attempt,
                     MODEL_RETRIES,
                     type(e).__name__,
-                    e,
+                    repr(e),
                 )
 
                 if (
@@ -1626,7 +1598,32 @@ async def start(
 
     await (
         update.message.reply_text(
-            "🧠 BUD на месте. Работаем."
+            "🧠 Привет, Андрей.\n\n"
+            "Я BUD. Твой личный цифровой помощник.\n\n"
+            "Помогаю разбирать задачи, проекты, "
+            "идеи и проблемы, искать слабые места "
+            "и двигаться к результату.\n\n"
+            "Готов. Что делаем?",
+            reply_markup=get_start_keyboard(),
+        )
+    )
+
+
+async def menu_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not is_allowed(
+        update
+    ):
+
+        return
+
+    await (
+        update.message.reply_text(
+            MENU_TEXT,
+            reply_markup=get_main_keyboard(),
         )
     )
 
@@ -1642,16 +1639,272 @@ async def memory_command(
 
         return
 
-    clear_memory(
+    await (
+        update.message.reply_text(
+            "⚠️ Ты точно хочешь очистить "
+            "память и историю переписки?\n\n"
+            "Это действие нельзя отменить.",
+            reply_markup=get_clear_memory_keyboard(),
+        )
+    )
+
+
+# =========================
+# КНОПКИ
+# =========================
+
+async def button_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    if query is None:
+
+        return
+
+    if (
+        query.from_user.id
+        != ALLOWED_USER_ID
+    ):
+
+        await query.answer()
+
+        return
+
+    await query.answer()
+
+    data = query.data
+
+    if data == "start_work":
+
+        await query.edit_message_text(
+            "🚀 Поехали.\n\n"
+            "Пиши, что нужно сделать. "
+            "Разберёмся."
+        )
+
+        await (
+            query.message.reply_text(
+                MENU_TEXT,
+                reply_markup=get_main_keyboard(),
+            )
+        )
+
+        return
+
+    if data == "what_can_do":
+
+        await query.edit_message_text(
+            "🧠 Что умеет BUD\n\n"
+            "• Разбирать задачи и проекты\n"
+            "• Помогать с кодом и ошибками\n"
+            "• Искать слабые места в идеях\n"
+            "• Планировать действия\n"
+            "• Помнить важный контекст\n"
+            "• Работать с командой из 11 экспертов\n"
+            "• Проверять решения и риски\n"
+            "• Помогать доводить дела до результата"
+        )
+
+        return
+
+    if data == "clear_memory_confirm":
+
+        clear_memory(
+            query.from_user.id
+        )
+
+        await query.edit_message_text(
+            "🧹 Готово. Память и история "
+            "переписки очищены."
+        )
+
+        return
+
+    if data == "clear_memory_cancel":
+
+        await query.edit_message_text(
+            "↩️ Очистка отменена. "
+            "Память сохранена."
+        )
+
+        return
+
+
+# =========================
+# ОБРАБОТКА МЕНЮ
+# =========================
+
+async def menu_actions(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not is_allowed(
+        update
+    ):
+
+        return False
+
+    if (
+        update.message is None
+        or not update.message.text
+    ):
+
+        return False
+
+    user_id = (
         update.effective_user.id
     )
 
-    await (
-        update.message.reply_text(
-            "🧹 Память и история "
-            "переписки очищены."
-        )
+    user_text = (
+        update.message.text
     )
+
+    if user_text == BUTTON_CHAT:
+
+        await (
+            update.message.reply_text(
+                "💬 Продолжаем. "
+                "Пиши, что нужно сделать."
+            )
+        )
+
+        return True
+
+    if user_text == BUTTON_MEMORY:
+
+        summary = get_memory_summary(
+            user_id
+        )
+
+        recent_rows = get_recent_messages(
+            user_id,
+            8,
+        )
+
+        message_count = get_message_count(
+            user_id
+        )
+
+        if summary.strip():
+
+            memory_text = (
+                "🧠 Что сейчас сохранено в памяти:\n\n"
+                f"{summary}"
+            )
+
+        else:
+
+            memory_text = (
+                "🧠 Отдельная сводная память "
+                "пока не создана.\n\n"
+                "BUD продолжает удерживать "
+                "последние сообщения из переписки."
+            )
+
+        memory_text += (
+            "\n\n"
+            f"📨 Сообщений в истории: "
+            f"{message_count}\n"
+            f"🧠 Последних сообщений в контексте: "
+            f"{len(recent_rows)}"
+        )
+
+        await send_long_message(
+            update,
+            memory_text,
+        )
+
+        return True
+
+    if user_text == BUTTON_TEAM:
+
+        await (
+            update.message.reply_text(
+                "👥 Команда BUD\n\n"
+                "🧠 Генератор — идеи и варианты\n"
+                "🔍 Критик — ошибки и слабые места\n"
+                "🔧 Практик — реальные действия\n"
+                "😈 Адвокат дьявола — жёсткая проверка\n"
+                "🎯 Стратег — последствия и направление\n"
+                "🧨 Безумный — нестандартные решения\n"
+                "🕵️ Шерлок — скрытые детали\n"
+                "🧮 Счётовод — расчёты и ограничения\n"
+                "😂 Клоун — юмор и необычный взгляд\n"
+                "🔥 Провокатор — неудобные вопросы\n"
+                "🔬 Учёный — факты против предположений\n\n"
+                "Для полного разбора напиши:\n"
+                "«Подключи всю команду»"
+            )
+        )
+
+        return True
+
+    if user_text == BUTTON_PROJECTS:
+
+        summary = get_memory_summary(
+            user_id
+        )
+
+        if summary.strip():
+
+            await (
+                update.message.reply_text(
+                    "📋 Текущий сохранённый контекст "
+                    "работы:\n\n"
+                    f"{summary}"
+                )
+            )
+
+        else:
+
+            await (
+                update.message.reply_text(
+                    "📋 Пока нет отдельной сводки "
+                    "активных задач.\n\n"
+                    "Продолжай работу в диалоге, "
+                    "и BUD будет удерживать "
+                    "контекст переписки."
+                )
+            )
+
+        return True
+
+    if user_text == BUTTON_SETTINGS:
+
+        await (
+            update.message.reply_text(
+                "⚙️ Настройки BUD\n\n"
+                f"Основная модель: {MODEL}\n"
+                f"Запасная модель: {FALLBACK_MODEL}\n"
+                f"Последних сообщений в памяти: "
+                f"{MEMORY_RECENT_MESSAGES}\n"
+                f"Сжатие истории после: "
+                f"{MEMORY_COMPRESS_TRIGGER} сообщений\n"
+                f"Доступ: только для разрешённого "
+                f"пользователя"
+            )
+        )
+
+        return True
+
+    if user_text == BUTTON_CLEAR_MEMORY:
+
+        await (
+            update.message.reply_text(
+                "⚠️ Ты точно хочешь очистить "
+                "память и историю переписки?\n\n"
+                "Это действие нельзя отменить.",
+                reply_markup=get_clear_memory_keyboard(),
+            )
+        )
+
+        return True
+
+    return False
 
 
 # =========================
@@ -1673,6 +1926,15 @@ async def chat(
         update.message is None
         or not update.message.text
     ):
+
+        return
+
+    handled = await menu_actions(
+        update,
+        context,
+    )
+
+    if handled:
 
         return
 
@@ -1708,22 +1970,18 @@ async def chat(
 
     try:
 
-        # 1. Сохраняем сообщение.
         save_message(
             user_id,
             "user",
             user_text,
         )
 
-        # 2. При необходимости
-        # сжимаем старую память.
         await (
             compress_memory_if_needed(
                 user_id
             )
         )
 
-        # 3. Собираем контекст.
         messages = (
             build_context_messages(
                 user_id
@@ -1748,7 +2006,6 @@ async def chat(
             ),
         )
 
-        # 4. Запускаем анимацию.
         loading_task = (
             asyncio.create_task(
                 loading_animation(
@@ -1758,8 +2015,6 @@ async def chat(
             )
         )
 
-        # 5. Запрашиваем ИИ
-        # с повторными попытками.
         answer = (
             await ask_ai_with_retries(
                 messages
@@ -1773,14 +2028,12 @@ async def chat(
                 "получен пустой ответ"
             )
 
-        # 6. Сохраняем ответ.
         save_message(
             user_id,
             "assistant",
             answer,
         )
 
-        # 7. Останавливаем загрузку.
         stop_event.set()
 
         if loading_task:
@@ -1796,15 +2049,11 @@ async def chat(
                     "анимации"
                 )
 
-        # 8. Отправляем ответ.
         await send_long_message(
             update,
             answer,
         )
 
-        # 9. После ответа ещё раз
-        # проверяем, не пора ли
-        # сжать историю.
         await (
             compress_memory_if_needed(
                 user_id
@@ -1914,11 +2163,9 @@ def main():
         "🧠 BUD запускается | "
         "model=%s | "
         "fallback=%s | "
-        "timeout=%s сек | "
         "user_id=%s",
         MODEL,
         FALLBACK_MODEL,
-        OPENROUTER_TIMEOUT,
         ALLOWED_USER_ID,
     )
 
@@ -1939,8 +2186,21 @@ def main():
 
     app.add_handler(
         CommandHandler(
+            "menu",
+            menu_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
             "memory",
             memory_command,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            button_callback
         )
     )
 
