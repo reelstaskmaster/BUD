@@ -2,6 +2,7 @@ import os
 import sqlite3
 import asyncio
 import logging
+import time
 
 from openai import OpenAI
 from telegram import Update
@@ -42,6 +43,9 @@ FALLBACK_MODEL = os.getenv(
 # с каждой моделью.
 MODEL_RETRIES = 2
 
+# Таймаут одного запроса к OpenRouter.
+OPENROUTER_TIMEOUT = 90.0
+
 # Разрешённый Telegram ID.
 ALLOWED_USER_ID = int(
     os.getenv(
@@ -50,16 +54,15 @@ ALLOWED_USER_ID = int(
     )
 )
 
-# Файл базы памяти.
 DB_NAME = "bud.db"
 
 # Сколько последних сообщений
-# храним дословно.
-MEMORY_RECENT_MESSAGES = 50
+# стараемся хранить дословно.
+MEMORY_RECENT_MESSAGES = 20
 
 # При каком количестве сообщений
 # начинаем сжимать старую историю.
-MEMORY_COMPRESS_TRIGGER = 70
+MEMORY_COMPRESS_TRIGGER = 32
 
 # Максимальная длина
 # одного сообщения в базе.
@@ -67,10 +70,15 @@ MAX_MEMORY_MESSAGE_LENGTH = 8000
 
 # Максимальный размер всего контекста,
 # который отправляем модели.
-MAX_CONTEXT_CHARS = 100000
+#
+# Считается в символах.
+# Это не идеальный аналог токенов,
+# но простой предохранитель
+# от бесконечного раздувания истории.
+MAX_CONTEXT_CHARS = 45000
 
 # Максимальная длина сводной памяти.
-MAX_SUMMARY_LENGTH = 30000
+MAX_SUMMARY_LENGTH = 12000
 
 # Лимит Telegram.
 MAX_TELEGRAM_LENGTH = 4000
@@ -101,6 +109,10 @@ logging.getLogger(
     "httpx2"
 ).setLevel(logging.WARNING)
 
+logging.getLogger(
+    "openai"
+).setLevel(logging.WARNING)
+
 
 # =========================
 # OPENROUTER
@@ -123,6 +135,8 @@ client = OpenAI(
     base_url=(
         "https://openrouter.ai/api/v1"
     ),
+    timeout=OPENROUTER_TIMEOUT,
+    max_retries=0,
 )
 
 
@@ -1107,9 +1121,67 @@ def ask_model_sync(
     model,
 ):
 
-    response = client.responses.create(
-        model=model,
-        input=messages,
+    start_time = time.monotonic()
+
+    logger.info(
+        "Отправляем запрос в OpenRouter | "
+        "model=%s | "
+        "сообщений=%s",
+        model,
+        len(messages),
+    )
+
+    try:
+
+        response = client.responses.create(
+            model=model,
+            input=messages,
+        )
+
+    except Exception as e:
+
+        elapsed = (
+            time.monotonic()
+            - start_time
+        )
+
+        logger.error(
+            "Ошибка запроса к OpenRouter | "
+            "model=%s | "
+            "время=%.2f сек | "
+            "тип=%s | "
+            "ошибка=%r",
+            model,
+            elapsed,
+            type(e).__name__,
+            e,
+        )
+
+        raise
+
+    elapsed = (
+        time.monotonic()
+        - start_time
+    )
+
+    logger.info(
+        "Ответ получен от OpenRouter | "
+        "model=%s | "
+        "время=%.2f сек | "
+        "response_id=%s | "
+        "status=%s",
+        model,
+        elapsed,
+        getattr(
+            response,
+            "id",
+            None,
+        ),
+        getattr(
+            response,
+            "status",
+            None,
+        ),
     )
 
     answer = extract_output_text(
@@ -1118,11 +1190,20 @@ def ask_model_sync(
 
     if answer:
 
+        logger.info(
+            "Текст ответа получен | "
+            "model=%s | "
+            "символов=%s",
+            model,
+            len(answer),
+        )
+
         return answer
 
     logger.warning(
         "Модель вернула пустой output_text | "
-        "model=%s | response_id=%s | "
+        "model=%s | "
+        "response_id=%s | "
         "status=%s",
         model,
         getattr(
@@ -1187,6 +1268,15 @@ async def ask_ai_with_retries(
                     )
                 )
 
+                logger.info(
+                    "Модель успешно ответила | "
+                    "model=%s | "
+                    "попытка=%s/%s",
+                    model,
+                    attempt,
+                    MODEL_RETRIES,
+                )
+
                 return answer
 
             except Exception as e:
@@ -1197,12 +1287,13 @@ async def ask_ai_with_retries(
                     "Неудачный запрос к модели | "
                     "model=%s | "
                     "попытка=%s/%s | "
-                    "ошибка=%s: %s",
+                    "тип=%s | "
+                    "ошибка=%r",
                     model,
                     attempt,
                     MODEL_RETRIES,
                     type(e).__name__,
-                    repr(e),
+                    e,
                 )
 
                 if (
@@ -1667,7 +1758,8 @@ async def chat(
             )
         )
 
-        # 5. Запрашиваем ИИ.
+        # 5. Запрашиваем ИИ
+        # с повторными попытками.
         answer = (
             await ask_ai_with_retries(
                 messages
@@ -1822,9 +1914,11 @@ def main():
         "🧠 BUD запускается | "
         "model=%s | "
         "fallback=%s | "
+        "timeout=%s сек | "
         "user_id=%s",
         MODEL,
         FALLBACK_MODEL,
+        OPENROUTER_TIMEOUT,
         ALLOWED_USER_ID,
     )
 
