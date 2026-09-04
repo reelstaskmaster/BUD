@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import asyncio
+import logging
+from contextlib import closing
 
 from openai import OpenAI
 from telegram import Update
@@ -16,18 +18,54 @@ from telegram.ext import (
 
 
 # =========================
+# ЛОГИ
+# =========================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger("BUD")
+
+
+# =========================
 # НАСТРОЙКИ
 # =========================
 
-MODEL = "openrouter/free"
+MODEL = os.getenv("MODEL", "openrouter/free")
 
 ALLOWED_USER_ID = 411726428
 
-DB_NAME = "bud.db"
+# Если BUD_DB_PATH не задан, база лежит рядом с main.py.
+# Позже для Railway Volume зададим, например:
+# BUD_DB_PATH=/data/bud.db
+DB_NAME = os.getenv("BUD_DB_PATH", "bud.db")
 
 MEMORY_LIMIT = 30
 MAX_MEMORY_MESSAGE_LENGTH = 8000
+MAX_CONTEXT_CHARS = 60000
 MAX_TELEGRAM_LENGTH = 4000
+
+AI_TIMEOUT_SECONDS = 120
+
+
+# =========================
+# ПРОВЕРКА ПЕРЕМЕННЫХ
+# =========================
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError(
+        "Не задана переменная окружения OPENAI_API_KEY"
+    )
+
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError(
+        "Не задана переменная окружения TELEGRAM_BOT_TOKEN"
+    )
 
 
 # =========================
@@ -35,7 +73,7 @@ MAX_TELEGRAM_LENGTH = 4000
 # =========================
 
 client = OpenAI(
-    api_key=os.environ["OPENAI_API_KEY"],
+    api_key=OPENAI_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
 
@@ -505,6 +543,7 @@ LOADING_FRAMES = [
     "🔧 Формирую ответ...",
 ]
 
+
 active_users = set()
 
 
@@ -520,11 +559,22 @@ def is_allowed(update):
 
 
 # =========================
-# ПАМЯТЬ
+# БАЗА ДАННЫХ
 # =========================
 
 def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
+    db_dir = os.path.dirname(DB_NAME)
+
+    if db_dir:
+        os.makedirs(
+            db_dir,
+            exist_ok=True,
+        )
+
+    with sqlite3.connect(
+        DB_NAME,
+        timeout=10,
+    ) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -535,11 +585,29 @@ def init_db():
             )
         """)
 
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_user_id_id
+            ON messages(user_id, id)
+        """)
+
+        conn.commit()
+
+    logger.info(
+        "База данных готова: %s",
+        DB_NAME,
+    )
+
 
 def save_message(user_id, role, content):
+    if not content:
+        return
+
     content = content[:MAX_MEMORY_MESSAGE_LENGTH]
 
-    with sqlite3.connect(DB_NAME) as conn:
+    with sqlite3.connect(
+        DB_NAME,
+        timeout=10,
+    ) as conn:
         conn.execute(
             """
             INSERT INTO messages (
@@ -556,9 +624,14 @@ def save_message(user_id, role, content):
             ),
         )
 
+        conn.commit()
+
 
 def get_memory(user_id):
-    with sqlite3.connect(DB_NAME) as conn:
+    with sqlite3.connect(
+        DB_NAME,
+        timeout=10,
+    ) as conn:
         rows = conn.execute(
             """
             SELECT role, content
@@ -575,17 +648,38 @@ def get_memory(user_id):
 
     rows.reverse()
 
-    return [
-        {
-            "role": role,
-            "content": content,
-        }
-        for role, content in rows
-    ]
+    memory = []
+    total_chars = 0
+
+    for role, content in reversed(rows):
+
+        content_length = len(content)
+
+        if (
+            total_chars + content_length
+            > MAX_CONTEXT_CHARS
+        ):
+            break
+
+        memory.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+        total_chars += content_length
+
+    memory.reverse()
+
+    return memory
 
 
 def clear_memory(user_id):
-    with sqlite3.connect(DB_NAME) as conn:
+    with sqlite3.connect(
+        DB_NAME,
+        timeout=10,
+    ) as conn:
         conn.execute(
             """
             DELETE FROM messages
@@ -593,6 +687,25 @@ def clear_memory(user_id):
             """,
             (user_id,),
         )
+
+        conn.commit()
+
+
+def get_memory_stats(user_id):
+    with sqlite3.connect(
+        DB_NAME,
+        timeout=10,
+    ) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM messages
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    return row[0] if row else 0
 
 
 # =========================
@@ -680,7 +793,7 @@ async def loading_animation(
 
                 await asyncio.wait_for(
                     stop_event.wait(),
-                    timeout=1.2,
+                    timeout=1.5,
                 )
 
                 break
@@ -753,6 +866,44 @@ async def memory_command(
     )
 
 
+async def status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not is_allowed(update):
+        return
+
+    user_id = update.effective_user.id
+    messages_count = get_memory_stats(
+        user_id
+    )
+
+    db_path = os.path.abspath(
+        DB_NAME
+    )
+
+    db_exists = os.path.exists(
+        DB_NAME
+    )
+
+    db_size = (
+        os.path.getsize(DB_NAME)
+        if db_exists
+        else 0
+    )
+
+    await update.message.reply_text(
+        "🟢 BUD работает.\n\n"
+        f"🤖 Модель: {MODEL}\n"
+        f"💬 Сообщений в памяти: {messages_count}\n"
+        f"💾 База: {'найдена' if db_exists else 'не найдена'}\n"
+        f"📦 Размер базы: {db_size} байт\n"
+        f"🗂 Путь: {db_path}\n"
+        f"⏱ Таймаут модели: {AI_TIMEOUT_SECONDS} сек."
+    )
+
+
 # =========================
 # ОБЩЕНИЕ
 # =========================
@@ -772,7 +923,10 @@ async def chat(
         return
 
     user_id = update.effective_user.id
-    user_text = update.message.text
+    user_text = update.message.text.strip()
+
+    if not user_text:
+        return
 
     if user_id in active_users:
 
@@ -808,6 +962,13 @@ async def chat(
             get_memory(user_id)
         )
 
+        logger.info(
+            "Запрос пользователя %s | "
+            "сообщений в контексте: %s",
+            user_id,
+            len(messages) - 1,
+        )
+
         # Запускаем анимацию
         loading_task = asyncio.create_task(
             loading_animation(
@@ -824,9 +985,20 @@ async def chat(
                 input=messages,
             )
 
-        response = await asyncio.to_thread(
-            ask_ai
-        )
+        try:
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ask_ai
+                ),
+                timeout=AI_TIMEOUT_SECONDS,
+            )
+
+        except asyncio.TimeoutError:
+
+            raise TimeoutError(
+                "Превышено время ожидания ответа модели"
+            )
 
         answer = (
             response.output_text or ""
@@ -835,7 +1007,7 @@ async def chat(
         if not answer:
 
             raise ValueError(
-                "Пустой ответ от ИИ"
+                "Модель вернула пустой ответ"
             )
 
         # Сохраняем ответ
@@ -858,11 +1030,12 @@ async def chat(
             answer,
         )
 
-    except Exception as e:
+    except TimeoutError:
 
-        print(
-            "Ошибка BUD: "
-            f"{type(e).__name__}: {repr(e)}"
+        logger.warning(
+            "Таймаут ответа модели "
+            "для пользователя %s",
+            user_id,
         )
 
         stop_event.set()
@@ -876,15 +1049,57 @@ async def chat(
             except Exception:
                 pass
 
-        try:
+        await update.message.reply_text(
+            "⏱️ BUD слишком долго ждал ответ от модели "
+            "и остановил запрос. Попробуй ещё раз."
+        )
 
-            await update.message.reply_text(
-                "⚠️ Не удалось обработать запрос. "
-                "Попробуйте ещё раз."
-            )
+    except sqlite3.Error as e:
 
-        except TelegramError:
-            pass
+        logger.exception(
+            "Ошибка базы данных: %s",
+            repr(e),
+        )
+
+        stop_event.set()
+
+        if loading_task:
+
+            try:
+
+                await loading_task
+
+            except Exception:
+                pass
+
+        await update.message.reply_text(
+            "💾 BUD столкнулся с ошибкой памяти. "
+            "Запрос не удалось обработать."
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Ошибка BUD: %s: %r",
+            type(e).__name__,
+            e,
+        )
+
+        stop_event.set()
+
+        if loading_task:
+
+            try:
+
+                await loading_task
+
+            except Exception:
+                pass
+
+        await update.message.reply_text(
+            "⚠️ BUD столкнулся с ошибкой при обработке "
+            "запроса. Причина записана в журнал."
+        )
 
     finally:
 
@@ -906,7 +1121,7 @@ def main():
     app = (
         Application.builder()
         .token(
-            os.environ["TELEGRAM_BOT_TOKEN"]
+            TELEGRAM_BOT_TOKEN
         )
         .build()
     )
@@ -926,6 +1141,13 @@ def main():
     )
 
     app.add_handler(
+        CommandHandler(
+            "status",
+            status_command,
+        )
+    )
+
+    app.add_handler(
         MessageHandler(
             filters.TEXT
             & ~filters.COMMAND,
@@ -933,7 +1155,7 @@ def main():
         )
     )
 
-    print(
+    logger.info(
         "🧠 BUD запущен. "
         "Доступ ограничен."
     )
