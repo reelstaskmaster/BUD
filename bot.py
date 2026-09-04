@@ -30,11 +30,15 @@ logging.basicConfig(
     ),
 )
 
-logging.getLogger("httpx").setLevel(
+logging.getLogger(
+    "httpx"
+).setLevel(
     logging.WARNING
 )
 
-logging.getLogger("httpx2").setLevel(
+logging.getLogger(
+    "httpx2"
+).setLevel(
     logging.WARNING
 )
 
@@ -70,6 +74,64 @@ client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
     base_url="https://openrouter.ai/api/v1",
 )
+
+
+# =========================
+# ПОСТОЯННЫЙ КОНТЕКСТ ПРОЕКТА
+# =========================
+
+PROJECT_CONTEXT = """
+ПОСТОЯННЫЙ КОНТЕКСТ ТЕКУЩЕГО ПРОЕКТА:
+
+Пользователь создаёт и настраивает собственного
+Telegram-бота BUD.
+
+BUD является этим Telegram-ботом.
+
+Текущая постоянная задача пользователя:
+развивать, проверять и улучшать BUD.
+
+Во время работы над BUD пользователь проверяет:
+
+- правильно ли BUD понимает задачу;
+- удерживает ли BUD контекст;
+- работает ли память;
+- помнит ли BUD общую цель разговора;
+- не выдумывает ли BUD факты;
+- не подменяет ли BUD задачу пользователя;
+- не отвечает ли шаблонно;
+- умеет ли BUD анализировать себя;
+- использует ли BUD роли разумно;
+- умеет ли BUD отвечать просто,
+  когда глубокий анализ не нужен;
+- не становится ли BUD генератором
+  красивого, но бесполезного текста.
+
+Если пользователь спрашивает:
+
+«Кто ты?»
+«Над чем мы сейчас работаем?»
+«Какая наша главная задача?»
+«Что мы сейчас делаем?»
+
+нужно учитывать этот постоянный контекст.
+
+В текущем проекте главная задача:
+сделать BUD действительно полезным цифровым помощником,
+который понимает контекст, помнит цель разговора,
+не подменяет задачу и помогает получать реальный результат.
+
+Этот контекст не является шаблоном для каждого ответа.
+
+Не нужно постоянно напоминать пользователю,
+что он создаёт BUD.
+
+Используй эту информацию только тогда,
+когда она относится к текущему разговору.
+
+Команда /memory очищает только историю обычной переписки.
+Она НЕ удаляет этот постоянный контекст проекта.
+"""
 
 
 # =========================
@@ -976,7 +1038,8 @@ async def memory_command(
     )
 
     await update.message.reply_text(
-        "🧹 История переписки очищена."
+        "🧹 История переписки очищена. "
+        "Контекст проекта BUD сохранён."
     )
 
 
@@ -1018,20 +1081,30 @@ async def chat(
 
     try:
 
+        # Сохраняем сообщение пользователя
         save_message(
             user_id,
             "user",
             user_text,
         )
 
+        # Получаем обычную память
+        memory = get_memory(
+            user_id
+        )
+
+        # Собираем полный контекст:
+        # правила + постоянный проект + память
         messages = [
             {
                 "role": "developer",
                 "content": SYSTEM_PROMPT,
-            }
+            },
+            {
+                "role": "developer",
+                "content": PROJECT_CONTEXT,
+            },
         ]
-
-        memory = get_memory(user_id)
 
         messages.extend(
             memory
@@ -1039,10 +1112,12 @@ async def chat(
 
         logger.info(
             f"Запрос пользователя {user_id} | "
-            f"сообщений в контексте: "
-            f"{len(memory)}"
+            f"сообщений в памяти: "
+            f"{len(memory)} | "
+            "постоянный контекст: включён"
         )
 
+        # Запускаем анимацию
         loading_task = asyncio.create_task(
             loading_animation(
                 update,
@@ -1050,16 +1125,19 @@ async def chat(
             )
         )
 
+        # Получаем ответ
         answer = await ask_ai(
             messages
         )
 
+        # Сохраняем ответ
         save_message(
             user_id,
             "assistant",
             answer,
         )
 
+        # Останавливаем загрузку
         stop_event.set()
 
         if loading_task:
@@ -1068,6 +1146,7 @@ async def chat(
 
             loading_task = None
 
+        # Отправляем ответ
         await send_long_message(
             update,
             answer,
@@ -1166,38 +1245,3 @@ def main():
         CommandHandler(
             "start",
             start,
-        )
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "memory",
-            memory_command,
-        )
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND,
-            chat,
-        )
-    )
-
-    app.add_error_handler(
-        error_handler
-    )
-
-    logger.info(
-        "🧠 BUD запущен. "
-        "Доступ ограничен."
-    )
-
-    app.run_polling(
-        drop_pending_updates=True
-    )
-
-
-if __name__ == "__main__":
-
-    main()
