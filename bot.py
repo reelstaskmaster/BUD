@@ -1245,3 +1245,38 @@ def main():
         CommandHandler(
             "start",
             start,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "memory",
+            memory_command,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & ~filters.COMMAND,
+            chat,
+        )
+    )
+
+    app.add_error_handler(
+        error_handler
+    )
+
+    logger.info(
+        "🧠 BUD запущен. "
+        "Доступ ограничен."
+    )
+
+    app.run_polling(
+        drop_pending_updates=True
+    )
+
+
+if __name__ == "__main__":
+
+    main()
