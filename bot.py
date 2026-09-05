@@ -3,6 +3,7 @@ import sqlite3
 import asyncio
 import logging
 
+import httpx
 from openai import OpenAI
 from telegram import Update
 from telegram.constants import ChatAction
@@ -30,7 +31,13 @@ FALLBACK_MODEL = os.getenv(
     "openai/gpt-oss-20b:free",
 )
 
+# Количество попыток
+# для каждой модели.
 MODEL_RETRIES = 2
+
+# Максимальное время ожидания
+# ответа от одной модели.
+MODEL_TIMEOUT = 45
 
 ALLOWED_USER_ID = int(
     os.getenv(
@@ -97,10 +104,18 @@ if not OPENAI_API_KEY:
     )
 
 
+# Клиент OpenRouter.
+# ВАЖНО:
+# timeout нужен, чтобы BUD не зависал
+# навечно при зависшей бесплатной модели.
 client = OpenAI(
     api_key=OPENAI_API_KEY,
     base_url=(
         "https://openrouter.ai/api/v1"
+    ),
+    timeout=httpx.Timeout(
+        timeout=MODEL_TIMEOUT,
+        connect=10.0,
     ),
 )
 
@@ -735,7 +750,7 @@ def build_context_messages(
 
     messages = [
         {
-            "role": "developer",
+            "role": "system",
             "content": SYSTEM_PROMPT,
         }
     ]
@@ -782,56 +797,50 @@ def build_context_messages(
 # ЗАПРОС К МОДЕЛИ
 # =========================
 
-def extract_output_text(
-    response,
-):
-
-    answer = (
-        getattr(
-            response,
-            "output_text",
-            "",
-        )
-        or ""
-    )
-
-    return answer.strip()
-
-
 def ask_model_sync(
     messages,
     model,
 ):
 
-    response = client.responses.create(
-        model=model,
-        input=messages,
+    logger.info(
+        "Отправка запроса в OpenRouter | "
+        "model=%s | "
+        "сообщений=%s",
+        model,
+        len(messages),
     )
 
-    answer = extract_output_text(
-        response
+    response = (
+        client.chat.completions.create(
+            model=model,
+            messages=messages,
+        )
     )
+
+    if not response.choices:
+
+        raise ValueError(
+            "Модель не вернула choices"
+        )
+
+    answer = (
+        response.choices[0]
+        .message
+        .content
+        or ""
+    ).strip()
 
     if answer:
 
-        return answer
+        logger.info(
+            "Ответ модели получен | "
+            "model=%s | "
+            "символов=%s",
+            model,
+            len(answer),
+        )
 
-    logger.warning(
-        "Модель вернула пустой output_text | "
-        "model=%s | response_id=%s | "
-        "status=%s",
-        model,
-        getattr(
-            response,
-            "id",
-            None,
-        ),
-        getattr(
-            response,
-            "status",
-            None,
-        ),
-    )
+        return answer
 
     raise ValueError(
         "Модель вернула пустой ответ"
@@ -859,6 +868,12 @@ async def ask_ai_with_retries(
 
     for model in models:
 
+        logger.info(
+            "Начинаю работу с моделью | "
+            "model=%s",
+            model,
+        )
+
         for attempt in range(
             1,
             MODEL_RETRIES + 1,
@@ -869,10 +884,12 @@ async def ask_ai_with_retries(
                 logger.info(
                     "Запрос к модели | "
                     "model=%s | "
-                    "попытка=%s/%s",
+                    "попытка=%s/%s | "
+                    "timeout=%s секунд",
                     model,
                     attempt,
                     MODEL_RETRIES,
+                    MODEL_TIMEOUT,
                 )
 
                 answer = (
@@ -893,12 +910,13 @@ async def ask_ai_with_retries(
                     "Неудачный запрос к модели | "
                     "model=%s | "
                     "попытка=%s/%s | "
-                    "ошибка=%s: %s",
+                    "ошибка=%s | "
+                    "детали=%r",
                     model,
                     attempt,
                     MODEL_RETRIES,
                     type(e).__name__,
-                    repr(e),
+                    e,
                 )
 
                 if (
@@ -906,13 +924,25 @@ async def ask_ai_with_retries(
                     < MODEL_RETRIES
                 ):
 
+                    logger.info(
+                        "Повторная попытка через "
+                        "%s секунд",
+                        attempt,
+                    )
+
                     await asyncio.sleep(
                         attempt
                     )
 
+        logger.warning(
+            "Модель исчерпала попытки | "
+            "model=%s",
+            model,
+        )
+
     raise RuntimeError(
         "Все попытки получить ответ "
-        "от модели завершились ошибкой"
+        "от моделей завершились ошибкой"
     ) from last_error
 
 
@@ -1244,8 +1274,6 @@ async def chat(
         )
 
         # 2. Удаляем старую историю.
-        # BUD держит только
-        # недавний текущий контекст.
         delete_old_messages(
             user_id
         )
@@ -1362,10 +1390,11 @@ async def chat(
 
             await (
                 update.message.reply_text(
-                    "⚠️ BUD столкнулся "
-                    "с ошибкой при обработке "
-                    "запроса. Причина записана "
-                    "в журнал."
+                    "⚠️ BUD не смог получить "
+                    "ответ от ИИ.\n\n"
+                    "Причина записана в лог. "
+                    "Проверьте OpenRouter "
+                    "и настройки моделей."
                 )
             )
 
@@ -1437,13 +1466,15 @@ def main():
         "model=%s | "
         "fallback=%s | "
         "user_id=%s | "
-        "team_members=%s",
+        "team_members=%s | "
+        "timeout=%s секунд",
         MODEL,
         FALLBACK_MODEL,
         ALLOWED_USER_ID,
         len(
             TEAM_MEMBERS
         ),
+        MODEL_TIMEOUT,
     )
 
     app = (
