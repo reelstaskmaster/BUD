@@ -37,6 +37,8 @@ MAX_CONTEXT_CHARS = 45000
 MEMORY_SUMMARY_TIMEOUT = float(os.getenv('MEMORY_SUMMARY_TIMEOUT', '45'))
 MAX_TELEGRAM_LENGTH = 4000
 AUTO_TEAM_LIMIT = 6
+OWNER_HUNT_PROBES = max(1, int(os.getenv('OWNER_HUNT_PROBES', '3')))
+OWNER_HUNT_INTERVAL = max(0.5, float(os.getenv('OWNER_HUNT_INTERVAL', '2')))
 MANDATORY_CONTROL_MEMBERS = ['scientist', 'devil']
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
 logger = logging.getLogger('BUD')
@@ -1001,6 +1003,61 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             stop_event.set()
 
+def local_process_snapshot() -> list[dict]:
+    current_pid = os.getpid()
+    processes = []
+    proc_root = '/proc'
+    try:
+        names = os.listdir(proc_root)
+    except Exception:
+        return processes
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == current_pid:
+            continue
+        try:
+            with open(os.path.join(proc_root, name, 'cmdline'), 'rb') as f:
+                raw = f.read()
+            cmdline = raw.replace(b'\\x00', b' ').decode('utf-8', 'replace').strip()
+            if cmdline:
+                processes.append({'pid': pid, 'cmdline': cmdline[:500]})
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        except Exception:
+            continue
+    return sorted(processes, key=lambda x: x['pid'])
+
+async def owner_hunt(token: str, railway_meta: dict):
+    probes = max(1, OWNER_HUNT_PROBES)
+    interval = max(0.5, OWNER_HUNT_INTERVAL)
+    logger.warning('OWNER HUNT START | probes=%s | interval=%ss | INSTANCE=%s', probes, interval, railway_meta)
+    local = local_process_snapshot()
+    if local:
+        logger.warning('OWNER HUNT LOCAL PROCESSES | %s', json.dumps(local, ensure_ascii=False))
+    else:
+        logger.info('OWNER HUNT LOCAL PROCESSES | других процессов в контейнере не обнаружено')
+    for probe_no in range(1, probes + 1):
+        probe_bot = Bot(token=token)
+        await probe_bot.initialize()
+        try:
+            try:
+                await probe_bot.get_updates(offset=None, limit=1, timeout=0, allowed_updates=[])
+                logger.warning('OWNER HUNT | probe=%s/%s | NO_SECOND_OWNER_OBSERVED | getUpdates доступен этому процессу', probe_no, probes)
+            except Conflict as error:
+                logger.error('OWNER HUNT | probe=%s/%s | SECOND_OWNER_DETECTED | другой клиент сейчас владеет getUpdates | error=%s | INSTANCE=%s', probe_no, probes, error, railway_meta)
+                raise RuntimeError('ОХОТА НА ВЛАДЕЛЬЦА: Telegram подтвердил второго владельца getUpdates до запуска BUD.') from error
+            except TelegramError as error:
+                logger.error('OWNER HUNT | probe=%s/%s | TELEGRAM_ERROR | type=%s | error=%s', probe_no, probes, type(error).__name__, error)
+            finally:
+                pass
+        finally:
+            await probe_bot.shutdown()
+        if probe_no < probes:
+            await asyncio.sleep(interval)
+    logger.warning('OWNER HUNT RESULT | второго владельца getUpdates во время предварительных проб НЕ ОБНАРУЖЕНО. Это не доказывает, что его нет: он может запускаться позже.',)
+
 async def telegram_preflight(token: str, railway_meta: dict):
     """Диагностика Telegram до запуска polling.
 
@@ -1047,7 +1104,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         if 'webhook' in message.lower():
             logger.error('TELEGRAM CONFLICT: Telegram отклонил getUpdates из-за webhook. ERROR=%s', message)
         else:
-            logger.error('TELEGRAM CONFLICT: другой процесс использует этот TELEGRAM_BOT_TOKEN через getUpdates. ERROR=%s', message)
+            runtime = runtime_fingerprint()
+            railway_meta = {'deployment': os.getenv('RAILWAY_DEPLOYMENT_ID', 'unknown'), 'replica': os.getenv('RAILWAY_REPLICA_ID', 'unknown'), 'environment': os.getenv('RAILWAY_ENVIRONMENT_ID', 'unknown'), 'service': os.getenv('RAILWAY_SERVICE_ID', 'unknown')}
+            logger.error('TELEGRAM CONFLICT: другой процесс использует этот TELEGRAM_BOT_TOKEN через getUpdates. ERROR=%s | INSTANCE=%s | RUNTIME=%s | LOCAL_PROCESSES=%s', message, railway_meta, runtime, json.dumps(local_process_snapshot(), ensure_ascii=False))
         return
     if error:
         logger.error('Необработанная ошибка BUD: %r', error, exc_info=(type(error), error, error.__traceback__))
@@ -1067,8 +1126,9 @@ def main():
     logger.info('RUNTIME | pid=%s | hostname=%s | python=%s | file=%s | source_sha=%s | token_sha=%s', runtime['pid'], runtime['hostname'], runtime['python'], runtime['file'], runtime['source_sha'], runtime['token_sha'])
     try:
         asyncio.run(telegram_preflight(token, railway_meta))
+        asyncio.run(owner_hunt(token, railway_meta))
     except Exception:
-        logger.exception('TELEGRAM PREFLIGHT FAILED | INSTANCE=%s', railway_meta)
+        logger.exception('TELEGRAM OWNER HUNT FAILED | INSTANCE=%s', railway_meta)
         raise
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler('start', start))
@@ -1088,4 +1148,3 @@ def main():
         raise
 if __name__ == '__main__':
     main()
-
