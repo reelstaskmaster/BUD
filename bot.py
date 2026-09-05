@@ -2,8 +2,8 @@ import os
 import sqlite3
 import asyncio
 import logging
+import re
 
-import httpx
 from openai import OpenAI
 from telegram import Update
 from telegram.constants import ChatAction
@@ -31,13 +31,14 @@ FALLBACK_MODEL = os.getenv(
     "openai/gpt-oss-20b:free",
 )
 
-# Количество попыток
-# для каждой модели.
 MODEL_RETRIES = 2
 
-# Максимальное время ожидания
-# ответа от одной модели.
-MODEL_TIMEOUT = 45
+MODEL_TIMEOUT = float(
+    os.getenv(
+        "MODEL_TIMEOUT",
+        "45",
+    )
+)
 
 ALLOWED_USER_ID = int(
     os.getenv(
@@ -104,19 +105,12 @@ if not OPENAI_API_KEY:
     )
 
 
-# Клиент OpenRouter.
-# ВАЖНО:
-# timeout нужен, чтобы BUD не зависал
-# навечно при зависшей бесплатной модели.
 client = OpenAI(
     api_key=OPENAI_API_KEY,
     base_url=(
         "https://openrouter.ai/api/v1"
     ),
-    timeout=httpx.Timeout(
-        timeout=MODEL_TIMEOUT,
-        connect=10.0,
-    ),
+    timeout=MODEL_TIMEOUT,
 )
 
 
@@ -183,6 +177,89 @@ TEAM_MEMBERS = {
         "и отмечает уровень достоверности."
     ),
 }
+
+
+# =========================
+# АЛИАСЫ ПОМОЩНИКОВ
+# =========================
+
+MEMBER_ALIASES = {
+    "генератор": [
+        "генератор",
+    ],
+
+    "критик": [
+        "критик",
+    ],
+
+    "практик": [
+        "практик",
+    ],
+
+    "адвокат": [
+        "адвокат",
+        "адвоката",
+        "адвокату",
+        "адвокатом",
+        "адвокат дьявола",
+        "адвоката дьявола",
+        "адвокатом дьявола",
+    ],
+
+    "стратег": [
+        "стратег",
+    ],
+
+    "безумный": [
+        "безумный",
+    ],
+
+    "шерлок": [
+        "шерлок",
+    ],
+
+    "счётовод": [
+        "счётовод",
+        "счетовод",
+    ],
+
+    "клоун": [
+        "клоун",
+    ],
+
+    "провокатор": [
+        "провокатор",
+    ],
+
+    "учёный": [
+        "учёный",
+        "ученый",
+    ],
+}
+
+
+# =========================
+# КОМАНДЫ ВСЕЙ БРИГАДЫ
+# =========================
+
+ALL_TEAM_PHRASES = [
+    "вся бригада",
+    "всей бригадой",
+    "всю бригаду",
+    "вся команда",
+    "всей командой",
+    "всю команду",
+    "все 11",
+    "все помощники",
+    "всех помощников",
+    "подключи всех",
+    "собери бригаду",
+    "собери команду",
+    "полный разбор",
+    "разберите со всех сторон",
+    "разберите со всех",
+    "разнесите идею",
+]
 
 
 # =========================
@@ -344,6 +421,19 @@ SYSTEM_PROMPT = """
 
 Подключай несколько нужных помощников.
 
+Если пользователь явно выбрал
+конкретных помощников через интерфейс
+или прямо назвал их в сообщении:
+
+используй именно выбранных помощников.
+
+Не добавляй от себя других участников,
+если пользователь явно выбрал состав.
+
+Если пользователь выбрал всю бригаду:
+
+используй всех 11 помощников.
+
 Если пользователь явно просит:
 
 - вся бригада;
@@ -358,22 +448,21 @@ SYSTEM_PROMPT = """
 
 используй всех 11 помощников.
 
-Пользователь может попросить
-подключить одного,
-нескольких или всех помощников.
-
-Например:
-
-«Подключи Учёного и Адвоката».
-
-Тогда используй именно их.
-
 
 =========================
-ПРАВИЛА БРИГАДЫ
+ПРАВИЛА ВЫБРАННОЙ БРИГАДЫ
 =========================
 
-Не заставляй 11 помощников
+Если состав участников был явно передан:
+
+не имитируй мнение других помощников.
+
+Используй только выбранный состав.
+
+Каждый выбранный помощник должен
+дать отдельный вклад.
+
+Не заставляй помощников
 механически повторять друг друга.
 
 У каждого должна быть
@@ -383,14 +472,38 @@ SYSTEM_PROMPT = """
 слабый — другой может
 с ним не согласиться.
 
-Адвокат дьявола обязан
-проверять важные выводы.
-
-Если критическая проблема найдена,
-не скрывай её.
-
-После анализа формируй
+После анализа всегда формируй
 единый итоговый вывод.
+
+
+=========================
+ФОРМАТ ОТВЕТА БРИГАДЫ
+=========================
+
+Если пользователь выбрал
+конкретных помощников или всю бригаду,
+используй структуру:
+
+Эмодзи Имя помощника
+Краткий уникальный разбор.
+
+Затем следующий выбранный помощник.
+
+После всех участников обязательно:
+
+🎯 Итог BUD
+
+Краткий общий вывод.
+
+Если нужен конкретный следующий шаг:
+
+🚀 Следующий шаг
+
+Конкретное действие.
+
+Не создавай разделы
+от имени помощников,
+которые не были выбраны.
 
 
 =========================
@@ -568,6 +681,174 @@ def is_allowed(update):
 
 
 # =========================
+# ВЫБОР ПОМОЩНИКОВ
+# =========================
+
+def normalize_text(text):
+
+    text = (
+        text
+        or ""
+    )
+
+    text = text.lower()
+
+    text = (
+        text.replace(
+            "ё",
+            "е",
+        )
+    )
+
+    return text
+
+
+def text_has_phrase(
+    text,
+    phrase,
+):
+
+    pattern = (
+        r"(?<!\w)"
+        + re.escape(
+            phrase
+        )
+        + r"(?!\w)"
+    )
+
+    return (
+        re.search(
+            pattern,
+            text,
+        )
+        is not None
+    )
+
+
+def detect_selected_members(
+    user_text,
+):
+
+    normalized_text = (
+        normalize_text(
+            user_text
+        )
+    )
+
+    normalized_all_phrases = [
+        normalize_text(
+            phrase
+        )
+        for phrase in ALL_TEAM_PHRASES
+    ]
+
+    for phrase in normalized_all_phrases:
+
+        if (
+            phrase
+            in normalized_text
+        ):
+
+            return list(
+                TEAM_MEMBERS.keys()
+            )
+
+    selected_members = []
+
+    for member_key, aliases in (
+        MEMBER_ALIASES.items()
+    ):
+
+        for alias in aliases:
+
+            normalized_alias = (
+                normalize_text(
+                    alias
+                )
+            )
+
+            if text_has_phrase(
+                normalized_text,
+                normalized_alias,
+            ):
+
+                selected_members.append(
+                    member_key
+                )
+
+                break
+
+    return selected_members
+
+
+def build_selection_instruction(
+    selected_members,
+):
+
+    if not selected_members:
+
+        return None
+
+    selected_descriptions = []
+
+    for member_key in selected_members:
+
+        description = (
+            TEAM_MEMBERS.get(
+                member_key,
+            )
+        )
+
+        if description:
+
+            selected_descriptions.append(
+                description
+            )
+
+    if (
+        len(selected_members)
+        == len(TEAM_MEMBERS)
+    ):
+
+        return (
+            "ПОЛЬЗОВАТЕЛЬ ЯВНО ВЫБРАЛ "
+            "ВСЮ БРИГАДУ BUD.\n\n"
+            "Ты обязан использовать "
+            "всех 11 помощников.\n\n"
+            "Каждый помощник должен дать "
+            "отдельный полезный и "
+            "неповторяющийся вклад.\n\n"
+            "Не пропускай участников.\n"
+            "Не объединяй нескольких "
+            "помощников в один раздел.\n\n"
+            "После всех 11 участников "
+            "обязательно дай раздел:\n"
+            "🎯 Итог BUD\n\n"
+            "Состав бригады:\n"
+            + "\n".join(
+                selected_descriptions
+            )
+        )
+
+    return (
+        "ПОЛЬЗОВАТЕЛЬ ЯВНО ВЫБРАЛ "
+        "КОНКРЕТНЫХ ПОМОЩНИКОВ.\n\n"
+        "Используй ТОЛЬКО этих участников.\n\n"
+        "Не добавляй других помощников "
+        "по собственной инициативе.\n\n"
+        "Каждый выбранный помощник "
+        "должен дать отдельный вклад.\n\n"
+        "После всех выбранных участников "
+        "обязательно дай:\n"
+        "🎯 Итог BUD\n\n"
+        "Выбранные помощники:\n"
+        + "\n".join(
+            selected_descriptions
+        )
+    )
+
+
+# =========================
 # БАЗА ДАННЫХ
 # =========================
 
@@ -741,6 +1022,7 @@ def clear_memory(
 
 def build_context_messages(
     user_id,
+    selection_instruction=None,
 ):
 
     recent_rows = get_recent_messages(
@@ -750,10 +1032,21 @@ def build_context_messages(
 
     messages = [
         {
-            "role": "system",
+            "role": "developer",
             "content": SYSTEM_PROMPT,
         }
     ]
+
+    if selection_instruction:
+
+        messages.append(
+            {
+                "role": "developer",
+                "content": (
+                    selection_instruction
+                ),
+            }
+        )
 
     for _id, role, content in recent_rows:
 
@@ -778,7 +1071,9 @@ def build_context_messages(
                 or ""
             )
 
-            total += len(content)
+            total += len(
+                content
+            )
 
         return total
 
@@ -788,7 +1083,11 @@ def build_context_messages(
         and len(messages) > 2
     ):
 
-        messages.pop(1)
+        # Сохраняем системное ядро
+        # и инструкцию выбора,
+        # удаляем самые старые
+        # сообщения диалога.
+        messages.pop(2)
 
     return messages
 
@@ -797,6 +1096,22 @@ def build_context_messages(
 # ЗАПРОС К МОДЕЛИ
 # =========================
 
+def extract_output_text(
+    response,
+):
+
+    answer = (
+        getattr(
+            response,
+            "output_text",
+            "",
+        )
+        or ""
+    )
+
+    return answer.strip()
+
+
 def ask_model_sync(
     messages,
     model,
@@ -804,43 +1119,51 @@ def ask_model_sync(
 
     logger.info(
         "Отправка запроса в OpenRouter | "
-        "model=%s | "
-        "сообщений=%s",
+        "model=%s | сообщений=%s",
         model,
-        len(messages),
+        len(
+            messages
+        ),
     )
 
-    response = (
-        client.chat.completions.create(
-            model=model,
-            messages=messages,
-        )
+    response = client.responses.create(
+        model=model,
+        input=messages,
     )
 
-    if not response.choices:
-
-        raise ValueError(
-            "Модель не вернула choices"
-        )
-
-    answer = (
-        response.choices[0]
-        .message
-        .content
-        or ""
-    ).strip()
+    answer = extract_output_text(
+        response
+    )
 
     if answer:
 
         logger.info(
             "Ответ модели получен | "
-            "model=%s | "
-            "символов=%s",
+            "model=%s | символов=%s",
             model,
-            len(answer),
+            len(
+                answer
+            ),
         )
 
         return answer
+
+    logger.warning(
+        "Модель вернула пустой output_text | "
+        "model=%s | response_id=%s | "
+        "status=%s",
+        model,
+        getattr(
+            response,
+            "id",
+            None,
+        ),
+        getattr(
+            response,
+            "status",
+            None,
+        ),
+    )
 
     raise ValueError(
         "Модель вернула пустой ответ"
@@ -910,8 +1233,7 @@ async def ask_ai_with_retries(
                     "Неудачный запрос к модели | "
                     "model=%s | "
                     "попытка=%s/%s | "
-                    "ошибка=%s | "
-                    "детали=%r",
+                    "ошибка=%s: %r",
                     model,
                     attempt,
                     MODEL_RETRIES,
@@ -924,25 +1246,13 @@ async def ask_ai_with_retries(
                     < MODEL_RETRIES
                 ):
 
-                    logger.info(
-                        "Повторная попытка через "
-                        "%s секунд",
-                        attempt,
-                    )
-
                     await asyncio.sleep(
                         attempt
                     )
 
-        logger.warning(
-            "Модель исчерпала попытки | "
-            "model=%s",
-            model,
-        )
-
     raise RuntimeError(
         "Все попытки получить ответ "
-        "от моделей завершились ошибкой"
+        "от модели завершились ошибкой"
     ) from last_error
 
 
@@ -967,7 +1277,7 @@ def split_message(
 
         if (
             len(text)
-            <= MAX_TELEGRAM_LENGTH
+            <= MAX_TELERAM_LENGTH
         ):
 
             parts.append(
@@ -1147,6 +1457,10 @@ async def start(
             "В ядре 11 помощников.\n"
             "Простые задачи решаю сам.\n"
             "Для сложных подключаю бригаду.\n\n"
+            "Можно прямо написать:\n"
+            "«Подключи Учёного и Адвоката»\n\n"
+            "Или:\n"
+            "«Вся бригада, разберите идею»\n\n"
             "Работаем."
         )
     )
@@ -1266,22 +1580,58 @@ async def chat(
 
     try:
 
-        # 1. Сохраняем сообщение.
+        # 1. Определяем,
+        # выбрал ли пользователь
+        # конкретных помощников.
+        selected_members = (
+            detect_selected_members(
+                user_text
+            )
+        )
+
+        selection_instruction = (
+            build_selection_instruction(
+                selected_members
+            )
+        )
+
+        if selected_members:
+
+            logger.info(
+                "Выбраны помощники | "
+                "user_id=%s | members=%s",
+                user_id,
+                ", ".join(
+                    selected_members
+                ),
+            )
+
+        else:
+
+            logger.info(
+                "Явный выбор помощников "
+                "не обнаружен | "
+                "user_id=%s",
+                user_id,
+            )
+
+        # 2. Сохраняем сообщение.
         save_message(
             user_id,
             "user",
             user_text,
         )
 
-        # 2. Удаляем старую историю.
+        # 3. Удаляем старую историю.
         delete_old_messages(
             user_id
         )
 
-        # 3. Собираем контекст.
+        # 4. Собираем контекст.
         messages = (
             build_context_messages(
-                user_id
+                user_id,
+                selection_instruction,
             )
         )
 
@@ -1303,7 +1653,7 @@ async def chat(
             ),
         )
 
-        # 4. Запускаем анимацию.
+        # 5. Запускаем анимацию.
         loading_task = (
             asyncio.create_task(
                 loading_animation(
@@ -1313,7 +1663,7 @@ async def chat(
             )
         )
 
-        # 5. Запрашиваем ИИ.
+        # 6. Запрашиваем ИИ.
         answer = (
             await ask_ai_with_retries(
                 messages
@@ -1327,20 +1677,20 @@ async def chat(
                 "получен пустой ответ"
             )
 
-        # 6. Сохраняем ответ.
+        # 7. Сохраняем ответ.
         save_message(
             user_id,
             "assistant",
             answer,
         )
 
-        # 7. После сохранения
-        # снова удаляем старые сообщения.
+        # 8. Снова удаляем
+        # старые сообщения.
         delete_old_messages(
             user_id
         )
 
-        # 8. Останавливаем загрузку.
+        # 9. Останавливаем загрузку.
         stop_event.set()
 
         if loading_task:
@@ -1356,7 +1706,7 @@ async def chat(
                     "анимации"
                 )
 
-        # 9. Отправляем ответ.
+        # 10. Отправляем ответ.
         await send_long_message(
             update,
             answer,
@@ -1390,11 +1740,10 @@ async def chat(
 
             await (
                 update.message.reply_text(
-                    "⚠️ BUD не смог получить "
-                    "ответ от ИИ.\n\n"
-                    "Причина записана в лог. "
-                    "Проверьте OpenRouter "
-                    "и настройки моделей."
+                    "⚠️ BUD столкнулся "
+                    "с ошибкой при обработке "
+                    "запроса. Причина записана "
+                    "в журнал."
                 )
             )
 
