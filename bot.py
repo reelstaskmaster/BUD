@@ -73,7 +73,7 @@ TEAM_MEMBERS = {
     "mad": {"emoji": "🧨", "name": "Безумный", "description": "ищет нестандартные решения и неожиданные ходы"},
     "sherlock": {"emoji": "🕵️", "name": "Шерлок", "description": "ищет скрытые детали, пропуски и неизвестные факторы"},
     "calculator": {"emoji": "🧮", "name": "Счётовод", "description": "проверяет числа, расчёты, ограничения и допущения"},
-    "clown": {"emoji": "😂", "name": "Клоун", "description": "смотрит нестандартно и замечает нелепости, когда это уместно"},
+    "tester": {"emoji": "🧪", "name": "Тестировщик", "description": "пытается сломать решение крайними случаями, отказами и негативными сценариями"},
     "provocateur": {"emoji": "🔥", "name": "Провокатор", "description": "задаёт неудобные вопросы и вскрывает слабые предпосылки"},
     "scientist": {"emoji": "🔬", "name": "Учёный", "description": "отделяет факты от предположений и требует оснований"},
 }
@@ -82,7 +82,7 @@ MEMBER_ALIASES = {
     "generator": ["генератор"], "critic": ["критик"], "practitioner": ["практик"],
     "devil": ["адвокат", "адвокат дьявола", "дьявол"], "strategist": ["стратег"],
     "mad": ["безумный"], "sherlock": ["шерлок"], "calculator": ["счётовод", "счетовод"],
-    "clown": ["клоун"], "provocateur": ["провокатор"], "scientist": ["ученый", "учёный"],
+    "tester": ["тестировщик", "тестер", "тестировщик бригады"],
 }
 
 ALL_TEAM_PHRASES = [
@@ -102,7 +102,7 @@ AUTO_KEYWORDS = {
     "sherlock": ["почему", "скрыт", "детал", "упуст", "неочевид"],
     "provocateur": ["а если", "неудоб", "почему вообще", "зачем"],
     "mad": ["нестандарт", "безум", "необыч", "креатив"],
-    "clown": ["смешн", "юмор", "прикол"],
+    "tester": ["тест", "сломай", "крайн", "edge case", "негативн", "сценарий", "нагруз"],
 }
 
 # =========================================================
@@ -146,7 +146,7 @@ ISSUE_PROMPT = """
 Верни JSON без Markdown:
 {
  "issues":[
-  {"id":"ISSUE-001","severity":"critical|serious|medium|cosmetic","claim":"что утверждалось или предлагается","problem":"в чём конкретная проблема","evidence":"на чём основано","owner":"generator|critic|practitioner|devil|strategist|mad|sherlock|calculator|clown|provocateur|scientist","fix_required":"что именно нужно изменить","verification":"как проверить исправление"}
+  {"id":"ISSUE-001","severity":"critical|serious|medium|cosmetic","claim":"что утверждалось или предлагается","problem":"в чём конкретная проблема","evidence":"на чём основано","owner":"generator|critic|practitioner|devil|strategist|mad|sherlock|calculator|tester|provocateur|scientist","fix_required":"что именно нужно изменить","verification":"как проверить исправление"}
  ]
 }
 Если существенных проблем нет, issues должен быть [].
