@@ -79,15 +79,23 @@ TEAM_MEMBERS = {
 }
 
 MEMBER_ALIASES = {
-    "generator": ["генератор"], "critic": ["критик"], "practitioner": ["практик"],
-    "devil": ["адвокат", "адвокат дьявола", "дьявол"], "strategist": ["стратег"],
-    "mad": ["безумный"], "sherlock": ["шерлок"], "calculator": ["счётовод", "счетовод"],
+    "generator": ["генератор"],
+    "critic": ["критик"],
+    "practitioner": ["практик"],
+    "devil": ["адвокат", "адвокат дьявола", "дьявол"],
+    "strategist": ["стратег"],
+    "mad": ["безумный", "безумец"],
+    "sherlock": ["шерлок"],
+    "calculator": ["счётовод", "счетовод", "калькулятор"],
     "tester": ["тестировщик", "тестер", "тестировщик бригады"],
+    "provocateur": ["провокатор", "провокатор бригады"],
+    "scientist": ["учёный", "ученый", "научный эксперт"],
 }
 
 ALL_TEAM_PHRASES = [
-    "вся бригада", "вся команда", "все 11", "подключи всех", "подключить всех",
-    "полный разбор", "разберите со всех сторон", "разбери со всех сторон", "глубоко разберись",
+    "вся бригада", "вся команда", "все 11", "всех 11", "всех 11 специалистов",
+    "11 специалистов", "подключи всех", "подключить всех", "полный разбор",
+    "разберите со всех сторон", "разбери со всех сторон", "глубоко разберись",
     "жестко проверь", "жёстко проверь", "разнесите идею", "собери команду",
 ]
 
@@ -213,7 +221,46 @@ FINAL_PROMPT = """
 Если данных недостаточно, честно обозначь это.
 """
 
-LOADING_FRAMES = ["🧠 Думаю...", "🧭 Разбираю задачу...", "👥 Подбираю участников...", "🔍 Проверяю аргументы...", "⚔️ Атакую решение...", "🎯 Собираю итог..."]
+LOADING_FRAMES = [
+    "🧠 BUD думает...",
+    "Загрузка ⠋",
+    "Загрузка ⠙",
+    "Загрузка ⠹",
+    "Загрузка ⠸",
+    "Загрузка ⠼",
+    "Загрузка ⠴",
+    "Загрузка ⠦",
+    "Загрузка ⠧",
+    "Загрузка ⠇",
+    "Загрузка ⠏",
+]
+
+def validate_team_configuration() -> None:
+    """Fail fast if the declared 11-person team becomes internally inconsistent."""
+    expected_team_size = 11
+    if len(TEAM_MEMBERS) != expected_team_size:
+        raise RuntimeError(
+            f"Некорректный состав BUD: ожидалось {expected_team_size} участников, "
+            f"получено {len(TEAM_MEMBERS)}: {sorted(TEAM_MEMBERS)}"
+        )
+
+    unknown_alias_keys = set(MEMBER_ALIASES) - set(TEAM_MEMBERS)
+    missing_aliases = set(TEAM_MEMBERS) - set(MEMBER_ALIASES)
+    if unknown_alias_keys or missing_aliases:
+        raise RuntimeError(
+            "Неконсистентные MEMBER_ALIASES: "
+            f"unknown={sorted(unknown_alias_keys)}, missing={sorted(missing_aliases)}"
+        )
+
+    missing_controls = set(MANDATORY_CONTROL_MEMBERS) - set(TEAM_MEMBERS)
+    if missing_controls:
+        raise RuntimeError(
+            f"Обязательные контрольные роли отсутствуют: {sorted(missing_controls)}"
+        )
+
+    empty_aliases = [key for key, aliases in MEMBER_ALIASES.items() if not aliases]
+    if empty_aliases:
+        raise RuntimeError(f"У участников отсутствуют алиасы: {empty_aliases}")
 
 # =========================================================
 # СОСТОЯНИЕ
@@ -1402,10 +1449,27 @@ def merge_scientist_issues(issues: list[dict], verdict: dict, candidate_fp: str,
 # ЯДРО BUD
 # =========================================================
 
+async def run_bud_stage(stage_name: str, awaitable):
+    """Run one pipeline stage with explicit start/success/failure logging."""
+    started = time.monotonic()
+    logger.info("BUD STAGE | %s | START", stage_name)
+    try:
+        result = await awaitable
+        logger.info("BUD STAGE | %s | OK | %.2fs", stage_name, time.monotonic() - started)
+        return result
+    except asyncio.CancelledError:
+        logger.warning("BUD STAGE | %s | CANCELLED | %.2fs", stage_name, time.monotonic() - started)
+        raise
+    except Exception as exc:
+        logger.exception("BUD STAGE | %s | FAILED | %.2fs | %r", stage_name, time.monotonic() - started, exc)
+        raise
+
+
 async def execute_bud(user_text: str, user_id: int):
     budget = RunBudget()
+    logger.info("BUD RUN | START | user_id=%s", user_id)
     context = build_context(user_id)
-    plan = await create_analysis_plan(user_text, budget)
+    plan = await run_bud_stage("plan", create_analysis_plan(user_text, budget))
     logger.info("План BUD | complexity=%s | members=%s | aspects=%s | calls=%s", plan.complexity, ",".join(plan.selected_members), ",".join(plan.aspects), budget.calls)
 
     if not plan.selected_members and plan.complexity == "simple":
@@ -1425,9 +1489,12 @@ async def execute_bud(user_text: str, user_id: int):
     remaining = budget.remaining_time()
     if remaining <= 0:
         raise TimeoutError("BUD превысил общий лимит времени до запуска команды")
-    team_results_raw = await asyncio.wait_for(
-        run_team_parallel(user_text, context, members, budget, strict=plan.is_full_team),
-        timeout=remaining,
+    team_results_raw = await run_bud_stage(
+        "team",
+        asyncio.wait_for(
+            run_team_parallel(user_text, context, members, budget, strict=plan.is_full_team),
+            timeout=remaining,
+        ),
     )
     if not team_results_raw:
         # Отказ отдельных/всех специалистов не должен создавать обход
@@ -1446,32 +1513,32 @@ async def execute_bud(user_text: str, user_id: int):
             direct_answer = await repair_final_answer(user_text, direct_answer, direct_answer, audit, budget)
 
     team_results = format_team_results(team_results_raw)
-    cross_exam = await cross_examination(user_text, context, team_results, budget)
-    issues = await discover_issues(user_text, context, team_results, cross_exam, budget)
-    integration = await integrator_review(user_text, context, team_results, cross_exam, issues, budget)
+    cross_exam = await run_bud_stage("cross_examination", cross_examination(user_text, context, team_results, budget))
+    issues = await run_bud_stage("issue_discovery", discover_issues(user_text, context, team_results, cross_exam, budget))
+    integration = await run_bud_stage("integrator", integrator_review(user_text, context, team_results, cross_exam, issues, budget))
 
-    candidate = await build_candidate(
+    candidate = await run_bud_stage("candidate_build", build_candidate(
         user_text,
         context,
         team_results + "\n\nПЕРЕКРЁСТНЫЙ ДОПРОС:\n" + cross_exam,
         integration,
         issues,
         budget,
-    )
+    ))
     candidate_version = 1
     passed = False
     seen_candidate_fingerprints = {candidate_fingerprint(candidate)}
     for round_no in range(1, MAX_REVIEW_ROUNDS + 1):
-        verdict = await devil_verdict(user_text, context, candidate, issues, round_no, budget)
+        verdict = await run_bud_stage(f"devil_round_{round_no}", devil_verdict(user_text, context, candidate, issues, round_no, budget))
         verdict["candidate_version"] = candidate_version
         merge_devil_issues(issues, verdict, candidate_fingerprint(candidate), candidate_version)
-        scientist = await scientist_verdict(user_text, context, candidate, issues, round_no, budget)
+        scientist = await run_bud_stage(f"scientist_round_{round_no}", scientist_verdict(user_text, context, candidate, issues, round_no, budget))
         merge_scientist_issues(issues, scientist, candidate_fingerprint(candidate), candidate_version)
         logger.info("Контроль | round=%s | Адвокат=%s | Учёный=%s | calls=%s", round_no, verdict["verdict"], scientist["verdict"], budget.calls)
         devil_ok = devil_pass_is_valid(verdict, issues)
         scientist_ok = devil_pass_is_valid(scientist, issues)
         if devil_ok and scientist_ok:
-            verification = await verify_issue_resolutions(user_text, candidate, issues, budget)
+            verification = await run_bud_stage(f"verification_round_{round_no}", verify_issue_resolutions(user_text, candidate, issues, budget))
             logger.info("Верификация исправлений | round=%s | verdict=%s | failed=%s | calls=%s", round_no, verification["verdict"], ",".join(verification["failed_issue_ids"]), budget.calls)
             if verification["verdict"] == "PASS":
                 verified_fp = verification.get("candidate_fingerprint", "")
@@ -1547,7 +1614,7 @@ async def execute_bud(user_text: str, user_id: int):
             return "⚠️ Я не буду выдавать это решение как надёжное: Адвокат BUD обнаружил проблемы, которые не удалось доказанно устранить в установленный лимит проверок."
         old_candidate = candidate
         old_fingerprint = candidate_fingerprint(old_candidate)
-        candidate = await repair_solution(user_text, context, candidate, issues, verdict, budget)
+        candidate = await run_bud_stage(f"repair_round_{round_no}", repair_solution(user_text, context, candidate, issues, verdict, budget))
         new_fingerprint = candidate_fingerprint(candidate)
         candidate_version += 1
 
@@ -1613,17 +1680,18 @@ async def execute_bud(user_text: str, user_id: int):
                 })
 
     if not passed:
+        logger.error("BUD RUN | FAILED_NO_PASS | calls=%s | elapsed=%.2fs", budget.calls, time.monotonic() - budget.started)
         return "⚠️ Решение не прошло внутренний контроль."
 
-    final_answer = await generate_final_answer(user_text, context, candidate, plan, budget)
+    final_answer = await run_bud_stage("final_answer", generate_final_answer(user_text, context, candidate, plan, budget))
     for audit_round in range(1, MAX_FINAL_AUDIT_ROUNDS + 1):
-        audit = await final_audit(user_text, candidate, final_answer, budget)
+        audit = await run_bud_stage(f"final_audit_{audit_round}", final_audit(user_text, candidate, final_answer, budget))
         logger.info("Финальный аудит | round=%s | verdict=%s | calls=%s", audit_round, audit["verdict"], budget.calls)
         if final_audit_is_valid(audit):
             return final_answer
         if audit_round == MAX_FINAL_AUDIT_ROUNDS:
             return "⚠️ Финальный ответ не прошёл контроль качества. Я не буду выдавать непроверенный результат."
-        final_answer = await repair_final_answer(user_text, candidate, final_answer, audit, budget)
+        final_answer = await run_bud_stage(f"final_repair_{audit_round}", repair_final_answer(user_text, candidate, final_answer, audit, budget))
     raise RuntimeError("Неожиданное завершение ядра BUD")
 
 # =========================================================
@@ -1680,7 +1748,7 @@ async def loading_animation(update: Update, stop_event: asyncio.Event):
             except TelegramError:
                 pass
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=1.2)
+                await asyncio.wait_for(stop_event.wait(), timeout=0.55)
                 break
             except asyncio.TimeoutError:
                 pass
@@ -1807,6 +1875,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 def main():
+    validate_team_configuration()
     init_db()
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
