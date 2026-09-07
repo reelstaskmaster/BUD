@@ -1,0 +1,24 @@
+[project]
+name = "telegpt"
+version = "0.1.0"
+description = "Telegram GPT bot with long-term memory and message coalescing"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.15",
+    "openai>=1.60",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "pgvector>=0.3",
+    "alembic>=1.14",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "greenlet>=3.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
