@@ -8,6 +8,7 @@ dependencies = [
     "openai>=1.60",
     "sqlalchemy[asyncio]>=2.0.36",
     "asyncpg>=0.30",
+    "psycopg2-binary>=2.9"
     "pgvector>=0.3",
     "alembic>=1.14",
     "pydantic-settings>=2.6",
