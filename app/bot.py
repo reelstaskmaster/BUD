@@ -8,7 +8,8 @@ from aiogram.enums import ChatType
 from aiogram.types import TelegramObject, Update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.handlers.chat import build_router
+from app.handlers.chat import build_router as build_chat_router
+from app.handlers.onboarding import build_router as build_onboarding_router
 from app.services.coalescer import ChatCoalescer
 from app.services.openai_client import OpenAIService
 
@@ -22,8 +23,8 @@ class PrivateOnlyMiddleware(BaseMiddleware):
     ) -> Any:
         chat = getattr(event, "chat", None)
         if chat is None and isinstance(event, Update):
-            incoming = event.message or event.edited_message
-            chat = incoming.chat if incoming else None
+            incoming = event.message or event.edited_message or event.callback_query
+            chat = incoming.message.chat if getattr(incoming, "message", None) else getattr(incoming, "chat", None)
         if chat is not None and chat.type != ChatType.PRIVATE:
             return None
         return await handler(event, data)
@@ -38,8 +39,10 @@ def build_dispatcher(
 ) -> Dispatcher:
     dp = Dispatcher()
     dp.message.middleware(PrivateOnlyMiddleware())
+    dp.callback_query.middleware(PrivateOnlyMiddleware())
+    dp.include_router(build_onboarding_router(session_factory=session_factory))
     dp.include_router(
-        build_router(
+        build_chat_router(
             bot=bot,
             session_factory=session_factory,
             coalescer=coalescer,
