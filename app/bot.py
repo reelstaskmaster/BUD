@@ -10,8 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.handlers.chat import build_router as build_chat_router
 from app.handlers.onboarding import build_router as build_onboarding_router
+from app.handlers.payments import build_router as build_payments_router
+from app.handlers.settings import build_router as build_settings_router
 from app.services.coalescer import ChatCoalescer
 from app.services.openai_client import OpenAIService
+from app.config import Settings
 
 
 class PrivateOnlyMiddleware(BaseMiddleware):
@@ -36,11 +39,14 @@ def build_dispatcher(
     session_factory: async_sessionmaker[AsyncSession],
     coalescer: ChatCoalescer,
     openai: OpenAIService,
+    settings: Settings,
 ) -> Dispatcher:
     dp = Dispatcher()
     dp.message.middleware(PrivateOnlyMiddleware())
     dp.callback_query.middleware(PrivateOnlyMiddleware())
     dp.include_router(build_onboarding_router(session_factory=session_factory))
+    dp.include_router(build_settings_router(session_factory=session_factory))
+    dp.include_router(build_payments_router(session_factory=session_factory, settings=settings))
     dp.include_router(
         build_chat_router(
             bot=bot,
