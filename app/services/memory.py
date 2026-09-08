@@ -30,31 +30,31 @@ class MemoryService:
         self.settings = settings
 
     async def retrieve(self, chat_id: int, query: str) -> MemoryContext:
-        embedding: list[float] | None = None
         async with self.session_factory() as session:
             profile = await repo.get_profile(session, chat_id)
             if not profile.memory_enabled:
                 return MemoryContext(facts=[], summaries=[], profile=profile)
             fact_count = await repo.count_active_facts(session, chat_id)
 
+            embedding: list[float] | None = None
+            if query.strip():
+                try:
+                    embedding = await self.openai.embed(query)
+                except Exception:
+                    logger.exception("Failed to embed retrieval query")
+
             if fact_count == 0:
                 facts: list[Fact] = []
+            elif fact_count <= self.settings.fact_all_threshold or embedding is None:
+                facts = await repo.list_active_facts(session, chat_id)
             else:
-                if query.strip():
-                    try:
-                        embedding = await self.openai.embed(query)
-                    except Exception:
-                        logger.exception("Failed to embed retrieval query")
-                if fact_count <= self.settings.fact_all_threshold or embedding is None:
-                    facts = await repo.list_active_facts(session, chat_id)
-                else:
-                    ranked = await repo.similar_facts(
-                        session,
-                        chat_id,
-                        embedding,
-                        limit=self.settings.fact_top_k,
-                    )
-                    facts = [fact for fact, _dist in ranked]
+                ranked = await repo.similar_facts(
+                    session,
+                    chat_id,
+                    embedding,
+                    limit=self.settings.fact_top_k,
+                )
+                facts = [fact for fact, _dist in ranked]
 
             latest = await repo.latest_summary(session, chat_id)
             summaries: list[Summary] = []
