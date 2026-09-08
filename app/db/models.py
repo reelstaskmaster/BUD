@@ -8,12 +8,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     Uuid,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -32,6 +34,71 @@ class Chat(Base):
     messages: Mapped[list["Message"]] = relationship(back_populates="chat")
     summaries: Mapped[list["Summary"]] = relationship(back_populates="chat")
     facts: Mapped[list["Fact"]] = relationship(back_populates="chat")
+    profile: Mapped["UserProfile | None"] = relationship(back_populates="chat", uselist=False)
+    memory_access: Mapped["MemoryAccess | None"] = relationship(back_populates="chat", uselist=False)
+    generation_balance: Mapped["GenerationBalance | None"] = relationship(
+        back_populates="chat", uselist=False
+    )
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True
+    )
+    onboarding_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    onboarding_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    preferences: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    about: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    chat: Mapped[Chat] = relationship(back_populates="profile")
+
+
+class MemoryAccess(Base):
+    __tablename__ = "memory_access"
+
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True
+    )
+    trial_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    trial_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paid_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    chat: Mapped[Chat] = relationship(back_populates="memory_access")
+
+
+class GenerationBalance(Base):
+    __tablename__ = "generation_balances"
+
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True
+    )
+    free_remaining: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    purchased_remaining: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_generated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    chat: Mapped[Chat] = relationship(back_populates="generation_balance")
 
 
 class Message(Base):
