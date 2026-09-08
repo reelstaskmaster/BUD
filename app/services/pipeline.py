@@ -57,10 +57,18 @@ class ReplyPipeline:
             async def handle_tool(name: str, args: dict) -> str:
                 return await self.memory.tool_handler(session, chat_id, name, args)
 
+            async def handle_image(prompt: str) -> bytes | None:
+                if not await repo.consume_generation(session, chat_id):
+                    return None
+                image = await self.openai.generate_image(prompt)
+                await session.commit()
+                return image
+
             return await self.openai.chat(
                 instructions=instructions,
                 messages=openai_messages,
                 tool_handler=handle_tool,
+                image_generation_handler=handle_image,
             )
 
     async def _download_file(self, file_id: str) -> bytes:
