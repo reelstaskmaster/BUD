@@ -74,6 +74,9 @@ class MemoryService:
     ) -> str:
         if not content.strip():
             return "Nothing to remember."
+        profile = await repo.get_profile(session, chat_id)
+        if not profile.memory_enabled:
+            return "Long-term memory is disabled."
         if not await repo.memory_is_writable(session, chat_id):
             await repo.freeze_expired_memory(session, chat_id)
             return "Long-term memory is currently frozen."
@@ -127,7 +130,8 @@ class MemoryService:
     async def maintain(self, chat_id: int) -> None:
         try:
             async with self.session_factory() as session:
-                if not await repo.memory_is_writable(session, chat_id):
+                profile = await repo.get_profile(session, chat_id)
+                if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
                     await repo.freeze_expired_memory(session, chat_id)
                     await session.commit()
                     return
@@ -138,7 +142,8 @@ class MemoryService:
 
     async def _extract_from_recent_turn(self, chat_id: int) -> None:
         async with self.session_factory() as session:
-            if not await repo.memory_is_writable(session, chat_id):
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
                 return
             recent = await repo.list_recent_messages(
                 session, chat_id, limit=min(8, self.settings.recent_messages)
@@ -165,7 +170,8 @@ class MemoryService:
 
     async def _summarize_if_needed(self, chat_id: int) -> None:
         async with self.session_factory() as session:
-            if not await repo.memory_is_writable(session, chat_id):
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
                 return
             recent = await repo.list_recent_messages(
                 session, chat_id, self.settings.recent_messages
@@ -198,7 +204,8 @@ class MemoryService:
             embedding = None
 
         async with self.session_factory() as session:
-            if not await repo.memory_is_writable(session, chat_id):
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
                 return
             await repo.add_summary(
                 session,
