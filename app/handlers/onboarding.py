@@ -62,6 +62,18 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
                 await session.commit()
                 await callback.answer()
                 return
+
+            # The final "about" button is intentionally tied to question 6's
+            # callback, while the stored onboarding step is already 6.
+            if action == "about" and profile.onboarding_step == len(QUESTIONS) and step == len(QUESTIONS) - 1:
+                await session.commit()
+                await callback.message.edit_text(
+                    "✍️ Расскажи о себе своими словами.\n\n"
+                    "Что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD — я сам выделю главное."
+                )
+                await callback.answer()
+                return
+
             if profile.onboarding_step != step:
                 await session.commit()
                 await callback.answer("Этот вопрос уже пройден.")
@@ -70,15 +82,6 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
             key = QUESTIONS[step][1]
             selected = list(preferences.get(key) or [])
             options = QUESTIONS[step][2]
-            if action == "about":
-                profile.onboarding_step = len(QUESTIONS)
-                await session.commit()
-                await callback.message.edit_text(
-                    "✍️ Расскажи о себе своими словами.\n\n"
-                    "Что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD — я сам выделю главное."
-                )
-                await callback.answer()
-                return
             if action == "done":
                 if not selected:
                     await callback.answer("Выбери хотя бы один вариант.")
