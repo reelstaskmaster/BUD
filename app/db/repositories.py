@@ -1,10 +1,22 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Fact, Message, Summary
+from app.db.models import (
+    Chat,
+    Fact,
+    GenerationBalance,
+    MemoryAccess,
+    Message,
+    Summary,
+    UserProfile,
+)
+
+TRIAL_DURATION = timedelta(days=3)
+PAID_ENTITLEMENT = timedelta(days=61)
+FREE_GENERATIONS = 3
 
 
 async def get_or_create_chat(session: AsyncSession, chat_id: int) -> Chat:
@@ -13,7 +25,140 @@ async def get_or_create_chat(session: AsyncSession, chat_id: int) -> Chat:
         chat = Chat(id=chat_id)
         session.add(chat)
         await session.flush()
+        now = datetime.now(timezone.utc)
+        session.add(
+            UserProfile(chat_id=chat_id)
+        )
+        session.add(
+            MemoryAccess(
+                chat_id=chat_id,
+                trial_started_at=now,
+                trial_ends_at=now + TRIAL_DURATION,
+            )
+        )
+        session.add(
+            GenerationBalance(
+                chat_id=chat_id,
+                free_remaining=FREE_GENERATIONS,
+            )
+        )
+        await session.flush()
+    else:
+        # Backfill records for chats created before profile/memory support.
+        if await session.get(UserProfile, chat_id) is None:
+            session.add(UserProfile(chat_id=chat_id))
+        if await session.get(MemoryAccess, chat_id) is None:
+            now = datetime.now(timezone.utc)
+            session.add(
+                MemoryAccess(
+                    chat_id=chat_id,
+                    trial_started_at=now,
+                    trial_ends_at=now + TRIAL_DURATION,
+                )
+            )
+        if await session.get(GenerationBalance, chat_id) is None:
+            session.add(GenerationBalance(chat_id=chat_id, free_remaining=FREE_GENERATIONS))
+        await session.flush()
     return chat
+
+
+async def get_profile(session: AsyncSession, chat_id: int) -> UserProfile:
+    await get_or_create_chat(session, chat_id)
+    profile = await session.get(UserProfile, chat_id)
+    assert profile is not None
+    return profile
+
+
+async def save_profile(
+    session: AsyncSession,
+    chat_id: int,
+    *,
+    preferences: dict | None = None,
+    about: str | None = None,
+    onboarding_complete: bool | None = None,
+    onboarding_step: int | None = None,
+) -> UserProfile:
+    profile = await get_profile(session, chat_id)
+    if preferences is not None:
+        profile.preferences = preferences
+    if about is not None:
+        profile.about = about
+    if onboarding_complete is not None:
+        profile.onboarding_complete = onboarding_complete
+    if onboarding_step is not None:
+        profile.onboarding_step = onboarding_step
+    await session.flush()
+    return profile
+
+
+async def get_memory_access(session: AsyncSession, chat_id: int) -> MemoryAccess:
+    await get_or_create_chat(session, chat_id)
+    access = await session.get(MemoryAccess, chat_id)
+    assert access is not None
+    return access
+
+
+async def memory_is_writable(session: AsyncSession, chat_id: int) -> bool:
+    access = await get_memory_access(session, chat_id)
+    now = datetime.now(timezone.utc)
+    if access.paid_ends_at and now < access.paid_ends_at:
+        return True
+    return now < access.trial_ends_at
+
+
+async def grant_paid_memory(session: AsyncSession, chat_id: int) -> MemoryAccess:
+    access = await get_memory_access(session, chat_id)
+    now = datetime.now(timezone.utc)
+    start = access.paid_ends_at if access.paid_ends_at and access.paid_ends_at > now else now
+    if access.paid_started_at is None:
+        access.paid_started_at = now
+    access.paid_ends_at = start + PAID_ENTITLEMENT
+    access.frozen_at = None
+    await session.flush()
+    return access
+
+
+async def freeze_expired_memory(session: AsyncSession, chat_id: int) -> bool:
+    access = await get_memory_access(session, chat_id)
+    now = datetime.now(timezone.utc)
+    if access.paid_ends_at and now >= access.paid_ends_at and access.frozen_at is None:
+        access.frozen_at = now
+        await session.flush()
+        return True
+    if access.paid_ends_at is None and now >= access.trial_ends_at and access.frozen_at is None:
+        access.frozen_at = now
+        await session.flush()
+        return True
+    return False
+
+
+async def get_generation_balance(session: AsyncSession, chat_id: int) -> GenerationBalance:
+    await get_or_create_chat(session, chat_id)
+    balance = await session.get(GenerationBalance, chat_id)
+    assert balance is not None
+    return balance
+
+
+async def consume_generation(session: AsyncSession, chat_id: int) -> bool:
+    balance = await get_generation_balance(session, chat_id)
+    if balance.free_remaining > 0:
+        balance.free_remaining -= 1
+    elif balance.purchased_remaining > 0:
+        balance.purchased_remaining -= 1
+    else:
+        return False
+    balance.total_generated += 1
+    await session.flush()
+    return True
+
+
+async def add_purchased_generations(session: AsyncSession, chat_id: int, amount: int) -> GenerationBalance:
+    if amount <= 0:
+        raise ValueError("Generation amount must be positive")
+    balance = await get_generation_balance(session, chat_id)
+    balance.purchased_remaining += amount
+    await session.flush()
+    return balance
 
 
 async def add_message(
