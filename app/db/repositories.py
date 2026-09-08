@@ -2,10 +2,10 @@ import calendar
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Fact, GenerationBalance, MemoryAccess, Message, Summary, UserProfile
+from app.db.models import Chat, Fact, GenerationBalance, MemoryAccess, Message, Payment, Summary, UserProfile
 
 TRIAL_DURATION = timedelta(days=3)
 FREE_GENERATIONS = 3
@@ -49,7 +49,7 @@ async def get_profile(session: AsyncSession, chat_id: int) -> UserProfile:
     return profile
 
 
-async def save_profile(session: AsyncSession, chat_id: int, *, preferences: dict | None = None, about: str | None = None, onboarding_complete: bool | None = None, onboarding_step: int | None = None) -> UserProfile:
+async def save_profile(session: AsyncSession, chat_id: int, *, preferences: dict | None = None, about: str | None = None, onboarding_complete: bool | None = None, onboarding_step: int | None = None, memory_enabled: bool | None = None) -> UserProfile:
     profile = await get_profile(session, chat_id)
     if preferences is not None:
         profile.preferences = preferences
@@ -59,6 +59,8 @@ async def save_profile(session: AsyncSession, chat_id: int, *, preferences: dict
         profile.onboarding_complete = onboarding_complete
     if onboarding_step is not None:
         profile.onboarding_step = onboarding_step
+    if memory_enabled is not None:
+        profile.memory_enabled = memory_enabled
     await session.flush()
     return profile
 
@@ -71,9 +73,17 @@ async def get_memory_access(session: AsyncSession, chat_id: int) -> MemoryAccess
 
 
 async def memory_is_writable(session: AsyncSession, chat_id: int) -> bool:
+    profile = await get_profile(session, chat_id)
+    if not profile.memory_enabled:
+        return False
     access = await get_memory_access(session, chat_id)
     now = datetime.now(timezone.utc)
     return bool((access.paid_ends_at and now < access.paid_ends_at) or now < access.trial_ends_at)
+
+
+async def memory_is_accessible(session: AsyncSession, chat_id: int) -> bool:
+    profile = await get_profile(session, chat_id)
+    return bool(profile.memory_enabled)
 
 
 async def grant_paid_memory(session: AsyncSession, chat_id: int) -> MemoryAccess:
@@ -136,6 +146,33 @@ async def add_purchased_generations(session: AsyncSession, chat_id: int, amount:
     return balance
 
 
+async def list_active_facts(session: AsyncSession, chat_id: int) -> list[Fact]:
+    result = await session.scalars(select(Fact).where(Fact.chat_id == chat_id, Fact.active.is_(True)).order_by(Fact.updated_at.desc()))
+    return list(result.all())
+
+
+async def clear_memory(session: AsyncSession, chat_id: int) -> int:
+    result = await session.execute(update(Fact).where(Fact.chat_id == chat_id, Fact.active.is_(True)).values(active=False))
+    await session.execute(delete(Summary).where(Summary.chat_id == chat_id))
+    return int(result.rowcount or 0)
+
+
+async def record_payment(session: AsyncSession, *, chat_id: int, payload: str, currency: str, total_amount: int, charge_id: str) -> Payment | None:
+    existing = await session.scalar(select(Payment).where(Payment.telegram_payment_charge_id == charge_id))
+    if existing is not None:
+        return None
+    payment = Payment(
+        chat_id=chat_id,
+        payload=payload,
+        currency=currency,
+        total_amount=total_amount,
+        telegram_payment_charge_id=charge_id,
+    )
+    session.add(payment)
+    await session.flush()
+    return payment
+
+
 async def add_message(session: AsyncSession, *, chat_id: int, role: str, content: str, media_type: str | None = None, telegram_file_id: str | None = None, answered: bool = False) -> Message:
     await get_or_create_chat(session, chat_id)
     message = Message(chat_id=chat_id, role=role, content=content, media_type=media_type, telegram_file_id=telegram_file_id, answered=answered)
@@ -181,11 +218,6 @@ async def add_summary(session: AsyncSession, *, chat_id: int, content: str, embe
 
 async def count_active_facts(session: AsyncSession, chat_id: int) -> int:
     return int(await session.scalar(select(func.count()).select_from(Fact).where(Fact.chat_id == chat_id, Fact.active.is_(True))) or 0)
-
-
-async def list_active_facts(session: AsyncSession, chat_id: int) -> list[Fact]:
-    result = await session.scalars(select(Fact).where(Fact.chat_id == chat_id, Fact.active.is_(True)).order_by(Fact.updated_at.desc()))
-    return list(result.all())
 
 
 async def similar_facts(session: AsyncSession, chat_id: int, embedding: list[float], *, limit: int, active_only: bool = True) -> list[tuple[Fact, float]]:
