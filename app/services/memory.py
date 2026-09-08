@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.db import repositories as repo
-from app.db.models import Fact, Summary
+from app.db.models import Fact, Summary, UserProfile
 from app.services.openai_client import OpenAIService
 from app.services.prompt import MemoryContext
 
@@ -38,6 +38,7 @@ class MemoryService:
                 logger.exception("Failed to embed retrieval query")
 
         async with self.session_factory() as session:
+            profile = await repo.get_profile(session, chat_id)
             fact_count = await repo.count_active_facts(session, chat_id)
 
             if fact_count == 0:
@@ -64,13 +65,16 @@ class MemoryService:
                 for summary in nearest:
                     if latest is None or summary.id != latest.id:
                         summaries.append(summary)
-            return MemoryContext(facts=facts, summaries=summaries)
+            return MemoryContext(facts=facts, summaries=summaries, profile=profile)
 
     async def remember_fact(
         self, session: AsyncSession, chat_id: int, content: str, category: str
     ) -> str:
         if not content.strip():
             return "Nothing to remember."
+        if not await repo.memory_is_writable(session, chat_id):
+            await repo.freeze_expired_memory(session, chat_id)
+            return "Long-term memory is currently frozen."
         category = category if category in FACT_CATEGORIES else "other"
         embedding = await self.openai.embed(content)
         duplicates = await repo.similar_facts(
@@ -118,6 +122,11 @@ class MemoryService:
 
     async def maintain(self, chat_id: int) -> None:
         try:
+            async with self.session_factory() as session:
+                if not await repo.memory_is_writable(session, chat_id):
+                    await repo.freeze_expired_memory(session, chat_id)
+                    await session.commit()
+                    return
             await self._extract_from_recent_turn(chat_id)
             await self._summarize_if_needed(chat_id)
         except Exception:
@@ -125,6 +134,8 @@ class MemoryService:
 
     async def _extract_from_recent_turn(self, chat_id: int) -> None:
         async with self.session_factory() as session:
+            if not await repo.memory_is_writable(session, chat_id):
+                return
             recent = await repo.list_recent_messages(
                 session, chat_id, limit=min(8, self.settings.recent_messages)
             )
@@ -150,6 +161,8 @@ class MemoryService:
 
     async def _summarize_if_needed(self, chat_id: int) -> None:
         async with self.session_factory() as session:
+            if not await repo.memory_is_writable(session, chat_id):
+                return
             recent = await repo.list_recent_messages(
                 session, chat_id, self.settings.recent_messages
             )
@@ -181,6 +194,8 @@ class MemoryService:
             embedding = None
 
         async with self.session_factory() as session:
+            if not await repo.memory_is_writable(session, chat_id):
+                return
             await repo.add_summary(
                 session,
                 chat_id=chat_id,
