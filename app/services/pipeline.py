@@ -14,15 +14,7 @@ from app.services.prompt import build_instructions
 
 
 class ReplyPipeline:
-    def __init__(
-        self,
-        *,
-        bot: Bot,
-        session_factory: async_sessionmaker[AsyncSession],
-        openai: OpenAIService,
-        memory: MemoryService,
-        settings: Settings,
-    ) -> None:
+    def __init__(self, *, bot: Bot, session_factory: async_sessionmaker[AsyncSession], openai: OpenAIService, memory: MemoryService, settings: Settings) -> None:
         self.bot = bot
         self.session_factory = session_factory
         self.openai = openai
@@ -35,33 +27,25 @@ class ReplyPipeline:
         instructions = build_instructions(memory)
 
         async with self.session_factory() as session:
-            recent = await repo.list_recent_messages(
-                session, chat_id, self.settings.recent_messages
-            )
+            recent = await repo.list_recent_messages(session, chat_id, self.settings.recent_messages)
 
         openai_messages: list[OpenAIInputMessage] = []
         for message in recent:
             image_bytes = None
             if message.media_type == "photo" and message.telegram_file_id:
                 image_bytes = await self._download_file(message.telegram_file_id)
-            openai_messages.append(
-                OpenAIInputMessage(
-                    role=message.role,
-                    text=_message_text_for_llm(message),
-                    image_bytes=image_bytes,
-                )
-            )
+            openai_messages.append(OpenAIInputMessage(role=message.role, text=_message_text_for_llm(message), image_bytes=image_bytes))
 
         async with self.session_factory() as session:
-
             async def handle_tool(name: str, args: dict) -> str:
                 return await self.memory.tool_handler(session, chat_id, name, args)
 
             async def handle_image(prompt: str) -> bytes | None:
-                if not await repo.consume_generation(session, chat_id):
+                if not await repo.generation_available(session, chat_id):
                     return None
                 image = await self.openai.generate_image(prompt)
-                await session.commit()
+                if await repo.consume_generation(session, chat_id):
+                    await session.commit()
                 return image
 
             return await self.openai.chat(
@@ -83,9 +67,5 @@ class ReplyPipeline:
 def _message_text_for_llm(message: Message) -> str:
     text = message.content or ""
     if message.role == "user" and message.media_type == "voice":
-        return (
-            "The user sent a voice/audio message. This is the transcription of "
-            "what they said — answer it as their message:\n"
-            f"{text}"
-        )
+        return "The user sent a voice/audio message. This is the transcription of what they said — answer it as their message:\n" + text
     return text
