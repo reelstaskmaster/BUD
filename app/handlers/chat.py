@@ -30,8 +30,10 @@ def build_router(
     @router.message(CommandStart(), private)
     async def on_start(message: Message) -> None:
         async with session_factory() as session:
-            await repo.get_or_create_chat(session, message.chat.id)
+            profile = await repo.get_profile(session, message.chat.id)
             await session.commit()
+        if not profile.onboarding_complete:
+            return
         await message.answer(
             "Привет. Пиши текстом, голосом или кидай картинку — я отвечу. "
             "Могу запоминать факты и рисовать по просьбе."
@@ -43,6 +45,18 @@ def build_router(
         if not text:
             return
         async with session_factory() as session:
+            profile = await repo.get_profile(session, message.chat.id)
+            if not profile.onboarding_complete and profile.onboarding_step == 6:
+                profile.about = text
+                profile.onboarding_complete = True
+                profile.onboarding_step = 7
+                await session.commit()
+                await message.answer(
+                    "Готово. 🧠 Я настроил базовый профиль BUD под тебя.\n\n"
+                    "Первые 3 дня полная долгосрочная память работает бесплатно. "
+                    "Дальше сохранённая память не удалится — она просто заморозится, пока ты не продлишь доступ."
+                )
+                return
             await repo.add_message(
                 session,
                 chat_id=message.chat.id,
