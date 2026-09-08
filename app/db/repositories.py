@@ -82,7 +82,6 @@ async def grant_paid_memory(session: AsyncSession, chat_id: int) -> MemoryAccess
     start = access.paid_ends_at if access.paid_ends_at and access.paid_ends_at > now else now
     if access.paid_started_at is None:
         access.paid_started_at = now
-    # One paid month + one gift month = two calendar months of memory access.
     access.paid_ends_at = add_calendar_months(start, 2)
     access.frozen_at = None
     await session.flush()
@@ -108,6 +107,11 @@ async def get_generation_balance(session: AsyncSession, chat_id: int) -> Generat
     balance = await session.get(GenerationBalance, chat_id)
     assert balance is not None
     return balance
+
+
+async def generation_available(session: AsyncSession, chat_id: int) -> bool:
+    balance = await get_generation_balance(session, chat_id)
+    return balance.free_remaining > 0 or balance.purchased_remaining > 0
 
 
 async def consume_generation(session: AsyncSession, chat_id: int) -> bool:
