@@ -169,7 +169,7 @@ class Summary(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    chat: Mapped[Chat] = relationship(back_populates="chat")
+    chat: Mapped[Chat] = relationship(back_populates="summaries")
 
 
 class Fact(Base):
