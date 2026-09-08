@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.db import repositories as repo
 
-MEMORY_PRICE_STARS = 100
 GENERATION_PACKS = {
     "gen10": (10, 50),
     "gen25": (25, 100),
@@ -17,6 +17,23 @@ GENERATION_PACKS = {
 
 def build_router(*, session_factory: async_sessionmaker[AsyncSession], settings: Settings) -> Router:
     router = Router(name="payments")
+
+    @router.message(Command("terms"), F.chat.type == "private")
+    async def terms(message: Message) -> None:
+        await message.answer(
+            "📄 Условия BUD\n\n"
+            "Покупая цифровые функции BUD, ты оплачиваешь доступ к выбранной функции в Telegram Stars.\n"
+            "Память: 1 оплаченный месяц + 1 месяц в подарок.\n"
+            "Генерации: цифровые пакеты с указанным количеством генераций.\n\n"
+            "Покупка не удаляет уже накопленную память. После окончания оплаченного доступа память замораживается."
+        )
+
+    @router.message(Command("paysupport"), F.chat.type == "private")
+    async def pay_support(message: Message) -> None:
+        await message.answer(
+            "💳 Поддержка по оплате\n\n"
+            "Если покупка прошла, но функция не начислилась, пришли сюда сообщение с чеком Telegram или опиши проблему. Я помогу проверить платёж."
+        )
 
     @router.callback_query(F.data == "pay:memory")
     async def buy_memory(callback: CallbackQuery) -> None:
@@ -61,7 +78,7 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession], settings:
     @router.message(F.successful_payment)
     async def successful_payment(message: Message) -> None:
         payment = message.successful_payment
-        if payment is None:
+        if payment is None or not _valid_payload(payment.invoice_payload, payment.total_amount, settings):
             return
         async with session_factory() as session:
             recorded = await repo.record_payment(
@@ -76,6 +93,8 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession], settings:
                 await session.rollback()
                 return
             if payment.invoice_payload == "memory_1plus1":
+                profile = await repo.get_profile(session, message.chat.id)
+                profile.memory_enabled = True
                 await repo.grant_paid_memory(session, message.chat.id)
                 text = "✅ Готово. Память BUD продлена на 2 календарных месяца: 1 оплаченный + 1 в подарок."
             else:
