@@ -5,16 +5,16 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.enums import ChatType
-from aiogram.types import TelegramObject, Update
+from aiogram.types import TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import Settings
 from app.handlers.chat import build_router as build_chat_router
 from app.handlers.onboarding import build_router as build_onboarding_router
 from app.handlers.payments import build_router as build_payments_router
 from app.handlers.settings import build_router as build_settings_router
 from app.services.coalescer import ChatCoalescer
 from app.services.openai_client import OpenAIService
-from app.config import Settings
 
 
 class PrivateOnlyMiddleware(BaseMiddleware):
@@ -24,10 +24,10 @@ class PrivateOnlyMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        chat = getattr(event, "chat", None)
-        if chat is None and isinstance(event, Update):
-            incoming = event.message or event.edited_message or event.callback_query
-            chat = incoming.message.chat if getattr(incoming, "message", None) else getattr(incoming, "chat", None)
+        message = getattr(event, "message", None)
+        chat = getattr(message, "chat", None)
+        if chat is None:
+            chat = getattr(event, "chat", None)
         if chat is not None and chat.type != ChatType.PRIVATE:
             return None
         return await handler(event, data)
