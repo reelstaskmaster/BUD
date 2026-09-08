@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.db import repositories as repo
-from app.db.models import Fact, Summary, UserProfile
+from app.db.models import Fact, Summary
 from app.services.openai_client import OpenAIService
 from app.services.prompt import MemoryContext
 
@@ -31,28 +31,30 @@ class MemoryService:
 
     async def retrieve(self, chat_id: int, query: str) -> MemoryContext:
         embedding: list[float] | None = None
-        if query.strip():
-            try:
-                embedding = await self.openai.embed(query)
-            except Exception:
-                logger.exception("Failed to embed retrieval query")
-
         async with self.session_factory() as session:
             profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled:
+                return MemoryContext(facts=[], summaries=[], profile=profile)
             fact_count = await repo.count_active_facts(session, chat_id)
 
             if fact_count == 0:
                 facts: list[Fact] = []
-            elif fact_count <= self.settings.fact_all_threshold or embedding is None:
-                facts = await repo.list_active_facts(session, chat_id)
             else:
-                ranked = await repo.similar_facts(
-                    session,
-                    chat_id,
-                    embedding,
-                    limit=self.settings.fact_top_k,
-                )
-                facts = [fact for fact, _dist in ranked]
+                if query.strip():
+                    try:
+                        embedding = await self.openai.embed(query)
+                    except Exception:
+                        logger.exception("Failed to embed retrieval query")
+                if fact_count <= self.settings.fact_all_threshold or embedding is None:
+                    facts = await repo.list_active_facts(session, chat_id)
+                else:
+                    ranked = await repo.similar_facts(
+                        session,
+                        chat_id,
+                        embedding,
+                        limit=self.settings.fact_top_k,
+                    )
+                    facts = [fact for fact, _dist in ranked]
 
             latest = await repo.latest_summary(session, chat_id)
             summaries: list[Summary] = []
@@ -93,6 +95,8 @@ class MemoryService:
         return "Fact stored."
 
     async def forget_fact(self, session: AsyncSession, chat_id: int, query: str) -> str:
+        if not query.strip():
+            return "Tell me what to forget."
         embedding = await self.openai.embed(query)
         matches = await repo.similar_facts(
             session, chat_id, embedding, limit=8, active_only=True
