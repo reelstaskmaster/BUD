@@ -45,8 +45,9 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
             await callback.answer()
             return
 
+        chat_id = callback.message.chat.id
         async with session_factory() as session:
-            profile = await repo.get_profile(session, callback.from_user.id)
+            profile = await repo.get_profile(session, chat_id)
             if profile.onboarding_complete:
                 await session.commit()
                 await callback.answer()
@@ -59,6 +60,15 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
             key = QUESTIONS[step][1]
             selected = list(preferences.get(key) or [])
             options = QUESTIONS[step][2]
+            if action == "about":
+                profile.onboarding_step = len(QUESTIONS)
+                await session.commit()
+                await callback.message.edit_text(
+                    "✍️ Расскажи о себе своими словами.\n\n"
+                    "Что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD — я сам выделю главное."
+                )
+                await callback.answer()
+                return
             if action == "done":
                 if not selected:
                     await callback.answer("Выбери хотя бы один вариант.")
@@ -66,7 +76,12 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
                 profile.onboarding_step = step + 1
                 if step + 1 == len(QUESTIONS):
                     await session.commit()
-                    await callback.message.edit_text("Последний вопрос. Теперь расскажи о себе своими словами.\n\nНапиши, что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD.")
+                    await callback.message.edit_text(
+                        "6/6 — Готово. Теперь можно рассказать о себе свободным текстом.",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="✍️ Рассказать о себе", callback_data=f"onb:{step}:about")],
+                        ]),
+                    )
                     await callback.answer()
                     return
                 await session.commit()
