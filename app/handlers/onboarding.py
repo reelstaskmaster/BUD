@@ -28,10 +28,16 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
                 await session.commit()
                 await message.answer("С возвращением. Пиши текстом, голосом или кидай картинку — я здесь.")
                 return
-            profile.onboarding_step = 0
+            step = profile.onboarding_step
             await session.commit()
+        if step >= len(QUESTIONS):
+            await message.answer(
+                "✍️ Расскажи о себе своими словами.\n\n"
+                "Что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD — я сам выделю главное."
+            )
+            return
         await message.answer("Привет. Давай за минуту настроим BUD под тебя.\n\nВыбирай несколько вариантов, где это подходит.")
-        await _send_question(message, 0)
+        await _send_question(message, step)
 
     @router.callback_query(F.data.startswith("onb:"))
     async def on_callback(callback: CallbackQuery) -> None:
@@ -39,7 +45,11 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
         if len(parts) != 3:
             await callback.answer()
             return
-        step = int(parts[1])
+        try:
+            step = int(parts[1])
+        except ValueError:
+            await callback.answer("Некорректный шаг.", show_alert=True)
+            return
         action = parts[2]
         if step < 0 or step >= len(QUESTIONS):
             await callback.answer()
@@ -88,7 +98,14 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
                 await callback.message.edit_text(_question_text(step + 1), reply_markup=_keyboard(step + 1, preferences))
                 await callback.answer()
                 return
-            index = int(action)
+            try:
+                index = int(action)
+            except ValueError:
+                await callback.answer("Некорректный вариант.", show_alert=True)
+                return
+            if index < 0 or index >= len(options):
+                await callback.answer("Некорректный вариант.", show_alert=True)
+                return
             value = options[index]
             if value in selected:
                 selected.remove(value)
