@@ -6,7 +6,7 @@ from io import BytesIO
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction, ChatType
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import repositories as repo
@@ -30,11 +30,16 @@ def build_router(
     @router.message(CommandStart(), private)
     async def on_start(message: Message) -> None:
         async with session_factory() as session:
-            await repo.get_or_create_chat(session, message.chat.id)
+            profile = await repo.get_profile(session, message.chat.id)
             await session.commit()
+        if not profile.onboarding_complete:
+            return
         await message.answer(
-            "Привет. Пиши текстом, голосом или кидай картинку — я отвечу. "
-            "Могу запоминать факты и рисовать по просьбе."
+            "Привет. Пиши текстом, голосом или кидай картинку — я отвечу.\n"
+            "Могу запоминать факты и рисовать по просьбе.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:open")],
+            ]),
         )
 
     @router.message(private, F.text, ~F.text.startswith("/"))
@@ -43,6 +48,21 @@ def build_router(
         if not text:
             return
         async with session_factory() as session:
+            profile = await repo.get_profile(session, message.chat.id)
+            if not profile.onboarding_complete and profile.onboarding_step == 6:
+                profile.about = text
+                profile.onboarding_complete = True
+                profile.onboarding_step = 7
+                await session.commit()
+                await message.answer(
+                    "Готово. 🧠 Я настроил базовый профиль BUD под тебя.\n\n"
+                    "Первые 3 дня полная долгосрочная память работает бесплатно. "
+                    "Дальше сохранённая память не удалится — она просто заморозится, пока ты не продлишь доступ.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:open")],
+                    ]),
+                )
+                return
             await repo.add_message(
                 session,
                 chat_id=message.chat.id,

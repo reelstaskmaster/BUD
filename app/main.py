@@ -58,6 +58,7 @@ async def run() -> None:
         session_factory=session_factory,
         coalescer=coalescer,
         openai=openai,
+        settings=settings,
     )
 
     try:

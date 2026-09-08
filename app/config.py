@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     coalesce_debounce_ms: int = 700
     embedding_dims: int = 1536
 
+    memory_price_stars: int = 100
+
     @property
     def coalesce_debounce_s(self) -> float:
         return self.coalesce_debounce_ms / 1000.0

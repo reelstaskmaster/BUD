@@ -30,15 +30,18 @@ class MemoryService:
         self.settings = settings
 
     async def retrieve(self, chat_id: int, query: str) -> MemoryContext:
-        embedding: list[float] | None = None
-        if query.strip():
-            try:
-                embedding = await self.openai.embed(query)
-            except Exception:
-                logger.exception("Failed to embed retrieval query")
-
         async with self.session_factory() as session:
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled:
+                return MemoryContext(facts=[], summaries=[], profile=profile)
             fact_count = await repo.count_active_facts(session, chat_id)
+
+            embedding: list[float] | None = None
+            if query.strip():
+                try:
+                    embedding = await self.openai.embed(query)
+                except Exception:
+                    logger.exception("Failed to embed retrieval query")
 
             if fact_count == 0:
                 facts: list[Fact] = []
@@ -64,13 +67,19 @@ class MemoryService:
                 for summary in nearest:
                     if latest is None or summary.id != latest.id:
                         summaries.append(summary)
-            return MemoryContext(facts=facts, summaries=summaries)
+            return MemoryContext(facts=facts, summaries=summaries, profile=profile)
 
     async def remember_fact(
         self, session: AsyncSession, chat_id: int, content: str, category: str
     ) -> str:
         if not content.strip():
             return "Nothing to remember."
+        profile = await repo.get_profile(session, chat_id)
+        if not profile.memory_enabled:
+            return "Long-term memory is disabled."
+        if not await repo.memory_is_writable(session, chat_id):
+            await repo.freeze_expired_memory(session, chat_id)
+            return "Long-term memory is currently frozen."
         category = category if category in FACT_CATEGORIES else "other"
         embedding = await self.openai.embed(content)
         duplicates = await repo.similar_facts(
@@ -89,6 +98,8 @@ class MemoryService:
         return "Fact stored."
 
     async def forget_fact(self, session: AsyncSession, chat_id: int, query: str) -> str:
+        if not query.strip():
+            return "Tell me what to forget."
         embedding = await self.openai.embed(query)
         matches = await repo.similar_facts(
             session, chat_id, embedding, limit=8, active_only=True
@@ -118,6 +129,12 @@ class MemoryService:
 
     async def maintain(self, chat_id: int) -> None:
         try:
+            async with self.session_factory() as session:
+                profile = await repo.get_profile(session, chat_id)
+                if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
+                    await repo.freeze_expired_memory(session, chat_id)
+                    await session.commit()
+                    return
             await self._extract_from_recent_turn(chat_id)
             await self._summarize_if_needed(chat_id)
         except Exception:
@@ -125,6 +142,9 @@ class MemoryService:
 
     async def _extract_from_recent_turn(self, chat_id: int) -> None:
         async with self.session_factory() as session:
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
+                return
             recent = await repo.list_recent_messages(
                 session, chat_id, limit=min(8, self.settings.recent_messages)
             )
@@ -150,6 +170,9 @@ class MemoryService:
 
     async def _summarize_if_needed(self, chat_id: int) -> None:
         async with self.session_factory() as session:
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
+                return
             recent = await repo.list_recent_messages(
                 session, chat_id, self.settings.recent_messages
             )
@@ -181,6 +204,9 @@ class MemoryService:
             embedding = None
 
         async with self.session_factory() as session:
+            profile = await repo.get_profile(session, chat_id)
+            if not profile.memory_enabled or not await repo.memory_is_writable(session, chat_id):
+                return
             await repo.add_summary(
                 session,
                 chat_id=chat_id,

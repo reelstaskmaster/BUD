@@ -16,6 +16,7 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 ToolHandler = Callable[[str, dict[str, Any]], Awaitable[str]]
+ImageGenerationHandler = Callable[[str], Awaitable[bytes | None]]
 
 CHAT_TOOLS: list[dict[str, Any]] = [
     {
@@ -28,10 +29,7 @@ CHAT_TOOLS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The fact to remember, as a short sentence.",
-                },
+                "content": {"type": "string", "description": "The fact to remember, as a short sentence."},
                 "category": {
                     "type": "string",
                     "enum": ["person", "interest", "preference", "name", "other"],
@@ -45,18 +43,10 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "forget_fact",
-        "description": (
-            "Forget previously stored facts matching the query. "
-            "Use when the user asks to forget something."
-        ),
+        "description": "Forget previously stored facts matching the query. Use when the user asks to forget something.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "What to forget, in natural language.",
-                },
-            },
+            "properties": {"query": {"type": "string", "description": "What to forget, in natural language."}},
             "required": ["query"],
             "additionalProperties": False,
         },
@@ -65,18 +55,10 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "generate_image",
-        "description": (
-            "Generate an image from a text prompt and send it to the user. "
-            "Call this when the user asks to draw, generate, or create a picture."
-        ),
+        "description": "Generate an image from a text prompt and send it to the user. Call this when the user asks to draw, generate, or create a picture.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "Detailed image generation prompt.",
-                },
-            },
+            "properties": {"prompt": {"type": "string", "description": "Detailed image generation prompt."}},
             "required": ["prompt"],
             "additionalProperties": False,
         },
@@ -178,20 +160,8 @@ class OpenAIService:
                                     "type": "object",
                                     "properties": {
                                         "content": {"type": "string"},
-                                        "category": {
-                                            "type": "string",
-                                            "enum": [
-                                                "person",
-                                                "interest",
-                                                "preference",
-                                                "name",
-                                                "other",
-                                            ],
-                                        },
-                                        "action": {
-                                            "type": "string",
-                                            "enum": ["add", "forget"],
-                                        },
+                                        "category": {"type": "string", "enum": ["person", "interest", "preference", "name", "other"]},
+                                        "action": {"type": "string", "enum": ["add", "forget"]},
                                     },
                                     "required": ["content", "category", "action"],
                                     "additionalProperties": False,
@@ -219,6 +189,7 @@ class OpenAIService:
         instructions: str,
         messages: list[OpenAIInputMessage],
         tool_handler: ToolHandler,
+        image_generation_handler: ImageGenerationHandler | None = None,
     ) -> ChatResult:
         openai_input = [_to_input_item(message) for message in messages]
         image_bytes: bytes | None = None
@@ -239,11 +210,7 @@ class OpenAIService:
 
             response = await self.client.responses.create(**kwargs)
             previous_response_id = response.id
-            calls = [
-                item
-                for item in (response.output or [])
-                if getattr(item, "type", None) == "function_call"
-            ]
+            calls = [item for item in (response.output or []) if getattr(item, "type", None) == "function_call"]
             if not calls:
                 return ChatResult(
                     text=(response.output_text or "").strip(),
@@ -261,28 +228,24 @@ class OpenAIService:
                 if name == "generate_image":
                     prompt = str(args.get("prompt") or "")
                     try:
-                        image_bytes = await self.generate_image(prompt)
-                        image_prompt = prompt
-                        tool_output = "Image generated and will be sent to the user."
+                        if image_generation_handler is not None:
+                            image_bytes = await image_generation_handler(prompt)
+                        else:
+                            image_bytes = await self.generate_image(prompt)
+                        if image_bytes is None:
+                            tool_output = "Image generation is unavailable because the user's generation balance is empty."
+                        else:
+                            image_prompt = prompt
+                            tool_output = "Image generated and will be sent to the user."
                     except Exception:
                         logger.exception("Image generation failed")
                         tool_output = "Image generation failed. Tell the user it did not work."
                 else:
                     tool_output = await tool_handler(name, args)
-                outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": tool_output,
-                    }
-                )
+                outputs.append({"type": "function_call_output", "call_id": call.call_id, "output": tool_output})
             current_input = outputs
 
-        return ChatResult(
-            text="I could not finish the tool loop. Please try again.",
-            image_bytes=image_bytes,
-            image_prompt=image_prompt,
-        )
+        return ChatResult(text="I could not finish the tool loop. Please try again.", image_bytes=image_bytes, image_prompt=image_prompt)
 
 
 def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
@@ -295,10 +258,7 @@ def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
             "role": "user",
             "content": [
                 {"type": "input_text", "text": text},
-                {
-                    "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{b64}",
-                },
+                {"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"},
             ],
         }
     return {"role": "user", "content": message.text or ""}
