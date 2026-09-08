@@ -8,36 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db import repositories as repo
 
 QUESTIONS = [
-    (
-        "Как BUD должен с тобой общаться?",
-        "communication",
-        ["😎 По-дружески", "😂 С юмором", "🧠 Умно и по делу", "💼 Серьёзно"],
-    ),
-    (
-        "Какие ответы тебе нравятся?",
-        "answer_style",
-        ["⚡ Короткие", "⚖️ Средние", "📚 Подробные", "🎯 Сразу решение"],
-    ),
-    (
-        "Что тебе интересно?",
-        "interests",
-        ["🚗 Автомобили", "🤖 Технологии", "💡 Идеи", "📱 Контент", "🎨 Творчество", "💼 Работа", "📚 Учёба"],
-    ),
-    (
-        "В чём тебе чаще всего помогать?",
-        "help_with",
-        ["Придумывать", "Анализировать", "Объяснять", "Создавать", "Планировать", "Принимать решения"],
-    ),
-    (
-        "Каким быть, если ты ошибаешься?",
-        "correction_style",
-        ["🔥 Говорить прямо", "🤝 Объяснять мягко", "🧠 Спорить и приводить аргументы", "🤐 Не вмешиваться без необходимости"],
-    ),
-    (
-        "Что BUD особенно важно запоминать?",
-        "remember",
-        ["❤️ Мои предпочтения", "🎯 Мои цели", "💡 Мои идеи", "📋 Мои проекты", "👥 Важных для меня людей"],
-    ),
+    ("Как BUD должен с тобой общаться?", "communication", ["😎 По-дружески", "😂 С юмором", "🧠 Умно и по делу", "💼 Серьёзно"]),
+    ("Какие ответы тебе нравятся?", "answer_style", ["⚡ Короткие", "⚖️ Средние", "📚 Подробные", "🎯 Сразу решение"]),
+    ("Что тебе интересно?", "interests", ["🚗 Автомобили", "🤖 Технологии", "💡 Идеи", "📱 Контент", "🎨 Творчество", "💼 Работа", "📚 Учёба"]),
+    ("В чём тебе чаще всего помогать?", "help_with", ["Придумывать", "Анализировать", "Объяснять", "Создавать", "Планировать", "Принимать решения"]),
+    ("Каким быть, если ты ошибаешься?", "correction_style", ["🔥 Говорить прямо", "🤝 Объяснять мягко", "🧠 Спорить и приводить аргументы", "🤐 Не вмешиваться без необходимости"]),
+    ("Что BUD особенно важно запоминать?", "remember", ["❤️ Мои предпочтения", "🎯 Мои цели", "💡 Мои идеи", "📋 Мои проекты", "👥 Важных для меня людей"]),
 ]
 
 
@@ -50,13 +26,11 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
             profile = await repo.get_profile(session, message.chat.id)
             if profile.onboarding_complete:
                 await session.commit()
+                await message.answer("С возвращением. Пиши текстом, голосом или кидай картинку — я здесь.")
                 return
             profile.onboarding_step = 0
             await session.commit()
-        await message.answer(
-            "Привет. Давай за минуту настроим BUD под тебя.\n\n"
-            "Выбирай несколько вариантов, где это подходит."
-        )
+        await message.answer("Привет. Давай за минуту настроим BUD под тебя.\n\nВыбирай несколько вариантов, где это подходит.")
         await _send_question(message, 0)
 
     @router.callback_query(F.data.startswith("onb:"))
@@ -92,10 +66,7 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
                 profile.onboarding_step = step + 1
                 if step + 1 == len(QUESTIONS):
                     await session.commit()
-                    await callback.message.edit_text(
-                        "Последний вопрос. Теперь можешь рассказать о себе своими словами.\n\n"
-                        "Напиши, что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD."
-                    )
+                    await callback.message.edit_text("Последний вопрос. Теперь расскажи о себе своими словами.\n\nНапиши, что тебе нравится, чем увлекаешься, чем занимаешься или что важно для BUD.")
                     await callback.answer()
                     return
                 await session.commit()
@@ -113,23 +84,6 @@ def build_router(*, session_factory: async_sessionmaker[AsyncSession]) -> Router
             await session.commit()
             await callback.message.edit_text(_question_text(step), reply_markup=_keyboard(step, preferences))
         await callback.answer()
-
-    @router.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
-    async def on_about(message: Message) -> None:
-        async with session_factory() as session:
-            profile = await repo.get_profile(session, message.chat.id)
-            if profile.onboarding_complete or profile.onboarding_step != len(QUESTIONS):
-                await session.commit()
-                return
-            profile.about = (message.text or "").strip() or None
-            profile.onboarding_complete = True
-            profile.onboarding_step = len(QUESTIONS) + 1
-            await session.commit()
-        await message.answer(
-            "Готово. 🧠 Я настроил базовый профиль BUD под тебя.\n\n"
-            "Первые 3 дня полная долгосрочная память работает бесплатно. "
-            "Дальше сохранённая память не удалится — она просто заморозится, пока ты не продлишь доступ."
-        )
 
     return router
 
