@@ -53,6 +53,7 @@ class UserProfile(Base):
     preferences: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)
     memory_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    terms_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -169,7 +170,7 @@ class Summary(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    chat: Mapped[Chat] = relationship(back_populates="summaries")
+    chat: Mapped[Chat] = relationship(back_populates="chat")
 
 
 class Fact(Base):
