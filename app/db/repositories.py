@@ -56,7 +56,7 @@ async def list_unanswered(session: AsyncSession, chat_id: int) -> list[Message]:
             Message.role == "user",
             Message.answered.is_(False),
         )
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.asc(), Message.id.asc())
     )
     return list(result.all())
 
