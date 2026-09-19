@@ -116,3 +116,51 @@ async def test_openrouter_image_generation_rejects_invalid_base64(monkeypatch) -
 class AsyncBadBase64Post:
     async def __call__(self, _url, *, headers, json):
         return BadBase64Response()
+
+
+class FakeGeminiResponse:
+    status_code = 200
+
+    def json(self) -> dict:
+        return {
+            "output_image": {
+                "data": base64.b64encode(b"gemini-image").decode("ascii")
+            }
+        }
+
+
+class FakeGeminiClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post(self, _url, *, headers, json):
+        assert headers["x-goog-api-key"] == "gemini-key"
+        assert json["model"] == "gemini-3.1-flash-image"
+        return FakeGeminiResponse()
+
+
+@pytest.mark.asyncio
+async def test_image_generation_falls_back_to_gemini(monkeypatch) -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = SimpleNamespace(
+        openrouter_api_key_pool=[],
+        openrouter_api_key="",
+        gemini_api_key_pool=["gemini-key"],
+        gemini_api_key="",
+        gemini_image_model="gemini-3.1-flash-image",
+        image_model="gpt-image-1",
+    )
+    service._key_cooldowns = {}
+    service._provider_next_index = {}
+
+    monkeypatch.setattr(
+        "app.services.openai_client.httpx.AsyncClient",
+        lambda **_kwargs: FakeGeminiClient(),
+    )
+
+    result = await service.generate_image("A beach at sunset.")
+
+    assert result == b"gemini-image"

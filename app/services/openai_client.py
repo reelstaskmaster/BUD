@@ -142,7 +142,7 @@ class OpenAIService:
         openrouter_keys = self._real_api_keys("openrouter")
         last_error: Exception | None = None
         if not openrouter_keys:
-            return await self._generate_image_openai(prompt)
+            return await self._generate_image_fallbacks(prompt, reference_image=reference_image)
 
         start_index = self._next_key_index("openrouter", len(openrouter_keys))
         candidates = [
@@ -196,13 +196,102 @@ class OpenAIService:
                     return base64.b64decode(b64, validate=True)
                 except (ValueError, binascii.Error) as exc:
                     raise AIProviderError("OpenRouter image generation returned invalid base64") from exc
+            except httpx.HTTPStatusError as exc:
+                last_error = AIProviderError(
+                    f"OpenRouter image generation failed ({exc.response.status_code})"
+                )
             except (httpx.RequestError, httpx.TimeoutException):
                 last_error = AIProviderError("OpenRouter image generation network error")
                 self._cool_down_key("openrouter", index, 30.0)
             except AIProviderError as exc:
                 last_error = exc
 
+        return await self._generate_image_fallbacks(
+            prompt,
+            reference_image=reference_image,
+            last_error=last_error,
+        )
+
+    async def _generate_image_fallbacks(
+        self,
+        prompt: str,
+        *,
+        reference_image: tuple[bytes, str] | None = None,
+        last_error: Exception | None = None,
+    ) -> bytes:
+        gemini_keys = self._real_api_keys("gemini")
+        if gemini_keys:
+            start_index = self._next_key_index("gemini", len(gemini_keys))
+            for offset in range(len(gemini_keys)):
+                index = (start_index + offset) % len(gemini_keys)
+                if self._key_is_cooling("gemini", index):
+                    continue
+                try:
+                    return await self._generate_image_gemini(
+                        prompt,
+                        gemini_keys[index],
+                        reference_image=reference_image,
+                    )
+                except Exception as exc:
+                    last_error = AIProviderError(f"Gemini image generation failed: {exc}")
+                    self._cool_down_key("gemini", index, 30.0)
+                    logger.warning("Gemini image key %d failed; trying next fallback", index + 1)
+
+        try:
+            return await self._generate_image_openai(prompt)
+        except Exception as exc:
+            last_error = exc
         raise last_error or AIProviderError("Image generation unavailable")
+
+    async def _generate_image_gemini(
+        self,
+        prompt: str,
+        api_key: str,
+        *,
+        reference_image: tuple[bytes, str] | None = None,
+    ) -> bytes:
+        inputs: list[dict[str, Any]] = []
+        if reference_image:
+            image_bytes, mime_type = reference_image
+            inputs.append({
+                "type": "image",
+                "mime_type": mime_type,
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            })
+        inputs.append({"type": "text", "text": prompt})
+        payload = {
+            "model": self.settings.gemini_image_model,
+            "input": inputs,
+            "response_format": {"type": "image", "mime_type": "image/png"},
+        }
+        async with httpx.AsyncClient(timeout=120) as http:
+            response = await http.post(
+                "https://generativelanguage.googleapis.com/v1beta/interactions",
+                headers={
+                    "x-goog-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        if response.status_code >= 400:
+            raise AIProviderError(f"Gemini image generation unavailable ({response.status_code})")
+        data = response.json()
+        output_image = data.get("output_image") or {}
+        b64 = output_image.get("data")
+        if not b64:
+            for step in data.get("steps") or []:
+                for block in step.get("content") or []:
+                    if block.get("type") == "image" and block.get("data"):
+                        b64 = block["data"]
+                        break
+                if b64:
+                    break
+        if not b64:
+            raise AIProviderError("Gemini image generation returned no image data")
+        try:
+            return base64.b64decode(b64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise AIProviderError("Gemini image generation returned invalid base64") from exc
 
     async def _generate_image_openai(self, prompt: str) -> bytes:
         response = await self.client.images.generate(
