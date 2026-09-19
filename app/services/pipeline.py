@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import mimetypes
 
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -42,13 +43,15 @@ class ReplyPipeline:
         openai_messages: list[OpenAIInputMessage] = []
         for message in recent:
             image_bytes = None
+            image_mime_type = None
             if message.media_type == "photo" and message.telegram_file_id:
-                image_bytes = await self._download_file(message.telegram_file_id)
+                image_bytes, image_mime_type = await self._download_file(message.telegram_file_id)
             openai_messages.append(
                 OpenAIInputMessage(
                     role=message.role,
                     text=_message_text_for_llm(message),
                     image_bytes=image_bytes,
+                    image_mime_type=image_mime_type,
                 )
             )
 
@@ -63,13 +66,15 @@ class ReplyPipeline:
                 tool_handler=handle_tool,
             )
 
-    async def _download_file(self, file_id: str) -> bytes:
+    async def _download_file(self, file_id: str) -> tuple[bytes, str | None]:
         file = await self.bot.get_file(file_id)
         if not file.file_path:
             raise RuntimeError(f"Telegram file path missing for {file_id}")
         stream = BytesIO()
         await self.bot.download_file(file.file_path, destination=stream)
-        return stream.getvalue()
+        data = stream.getvalue()
+        mime_type, _ = mimetypes.guess_type(file.file_path)
+        return data, mime_type
 
 
 def _message_text_for_llm(message: Message) -> str:
