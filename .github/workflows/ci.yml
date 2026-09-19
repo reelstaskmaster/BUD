@@ -30,6 +30,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q app alembic
 
+      - name: Build Docker image
+        run: docker build --tag bud-ci .
+
       - name: Validate Alembic metadata
         run: >-
           python -c "import importlib.util; p=\"alembic/versions/0001_initial.py\";
