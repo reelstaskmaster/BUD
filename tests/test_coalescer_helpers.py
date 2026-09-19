@@ -113,3 +113,23 @@ async def test_send_error_reply_survives_telegram_failure() -> None:
     coalescer = make_coalescer(BrokenBot())
 
     await coalescer._send_error_reply(123)
+
+
+@pytest.mark.asyncio
+async def test_send_result_does_not_mark_delivery_before_telegram_send() -> None:
+    bot = FakeBot()
+    coalescer = make_coalescer(bot)
+    result = ChatResult(text="hello", image_bytes=None)
+
+    await coalescer._send_result(42, result)
+
+    assert bot.messages == [(42, "hello")]
+
+
+def test_chat_coalescer_has_unique_process_owner() -> None:
+    first = make_coalescer(FakeBot())
+    second = make_coalescer(FakeBot())
+
+    assert first._owner
+    assert second._owner
+    assert first._owner != second._owner
