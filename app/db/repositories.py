@@ -65,7 +65,13 @@ async def mark_answered(session: AsyncSession, message_ids: list[uuid.UUID]) -> 
     if not message_ids:
         return
     await session.execute(
-        update(Message).where(Message.id.in_(message_ids)).values(answered=True)
+        update(Message)
+        .where(
+            Message.id.in_(message_ids),
+            Message.role == "user",
+            Message.answered.is_(False),
+        )
+        .values(answered=True)
     )
 
 
