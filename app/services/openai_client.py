@@ -9,11 +9,17 @@ from io import BytesIO
 from typing import Any
 
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+class OpenAIQuotaError(RuntimeError):
+    """The API account has exhausted its available credits/quota."""
+
+
 
 SUPPORTED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
@@ -122,10 +128,15 @@ class OpenAIService:
 
     async def embed(self, text: str) -> list[float]:
         cleaned = text.strip() or "empty"
-        response = await self.client.embeddings.create(
-            model=self.settings.embedding_model,
-            input=cleaned,
-        )
+        try:
+            response = await self.client.embeddings.create(
+                model=self.settings.embedding_model,
+                input=cleaned,
+            )
+        except RateLimitError as exc:
+            if _is_insufficient_quota(exc):
+                raise OpenAIQuotaError("OpenAI API quota is exhausted") from exc
+            raise
         return list(response.data[0].embedding)
 
     async def generate_image(self, prompt: str) -> bytes:
@@ -241,7 +252,12 @@ class OpenAIService:
                 kwargs["previous_response_id"] = previous_response_id
                 kwargs.pop("instructions", None)
 
-            response = await self.client.responses.create(**kwargs)
+            try:
+                response = await self.client.responses.create(**kwargs)
+            except RateLimitError as exc:
+                if _is_insufficient_quota(exc):
+                    raise OpenAIQuotaError("OpenAI API quota is exhausted") from exc
+                raise
             previous_response_id = response.id
             calls = [
                 item
@@ -326,3 +342,10 @@ def _audio_content_type(filename: str) -> str:
     if name.endswith(".webm"):
         return "audio/webm"
     return "audio/ogg"
+
+
+def _is_insufficient_quota(exc: RateLimitError) -> bool:
+    return (
+        getattr(exc, "code", None) == "insufficient_quota"
+        or "credit_balance_exhausted" in str(exc)
+    )
