@@ -306,7 +306,7 @@ async def create_reply_delivery(
     media_type: str,
     image_bytes: bytes | None,
 ) -> ReplyDelivery:
-    source_ids = [str(item) for item in source_message_ids]
+    source_ids = sorted(str(item) for item in source_message_ids)
     delivery_key = hashlib.sha256(
         f"{chat_id}:{','.join(source_ids)}".encode()
     ).hexdigest()
