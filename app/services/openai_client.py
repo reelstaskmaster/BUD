@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Any
 
 import httpx
-from openai import AsyncOpenAI, RateLimitError
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from app.config import Settings
 
@@ -228,7 +228,10 @@ class OpenAIService:
                     logger.warning("OpenAI quota exhausted; no further provider configured")
                 except RateLimitError as exc:
                     last_error = exc
-                    logger.warning("OpenAI rate limited; no further provider configured")
+                    logger.warning("OpenAI rate limited; falling back")
+                except (APIConnectionError, APITimeoutError) as exc:
+                    last_error = AIProviderError(f"OpenAI temporarily unavailable: {exc}")
+                    logger.warning("OpenAI unavailable; falling back")
         if last_error:
             raise last_error
         raise AIProviderError("No AI provider is configured")
