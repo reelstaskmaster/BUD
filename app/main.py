@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from aiohttp import web
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from app.bot import build_dispatcher
 from app.config import get_settings
@@ -62,10 +64,41 @@ async def run() -> None:
 
     try:
         await coalescer.recover_pending()
-        # Polling and webhooks are mutually exclusive; make the polling mode explicit.
-        await bot.delete_webhook(drop_pending_updates=False)
-        logger.info("Starting polling")
-        await dp.start_polling(bot)
+
+        if settings.bot_mode.lower() == "webhook":
+            if not settings.webhook_base_url:
+                raise RuntimeError("WEBHOOK_BASE_URL is required in webhook mode")
+            if not settings.webhook_secret:
+                raise RuntimeError("WEBHOOK_SECRET is required in webhook mode")
+
+            webhook_url = (
+                f"{settings.webhook_base_url.rstrip('/')}{settings.webhook_path}"
+            )
+            app = web.Application()
+            app.router.add_get("/health", lambda request: web.Response(text="ok"))
+            webhook_handler = SimpleRequestHandler(
+                dispatcher=dp,
+                bot=bot,
+                secret_token=settings.webhook_secret,
+                handle_in_background=True,
+            )
+            webhook_handler.register(app, path=settings.webhook_path)
+            setup_application(app, dp, bot=bot)
+            await bot.set_webhook(webhook_url, secret_token=settings.webhook_secret)
+            logger.info("Starting webhook on %s", webhook_url)
+
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, host="0.0.0.0", port=settings.port)
+            await site.start()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await runner.cleanup()
+        else:
+            await bot.delete_webhook(drop_pending_updates=False)
+            logger.info("Starting polling")
+            await dp.start_polling(bot)
     finally:
         await coalescer.shutdown()
         await bot.session.close()
