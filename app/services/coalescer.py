@@ -150,10 +150,12 @@ class ChatCoalescer:
             if not claimed:
                 return
             async with self.session_factory() as session:
-                pending = await repo.list_pending_reply_deliveries(session, chat_id, limit=1)
-            if pending and not await self._deliver_pending(pending[0]):
-                failed = True
-                return
+                pending = await repo.list_pending_reply_deliveries(session, chat_id, limit=10)
+            if pending:
+                for delivery in pending:
+                    if not await self._deliver_pending(delivery):
+                        failed = True
+                        return
             while True:
                 async with self.session_factory() as session:
                     claimed = await repo.claim_chat_processing(
