@@ -3,6 +3,7 @@ import os
 import uuid
 
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import repositories as repo
@@ -15,7 +16,7 @@ def _database_url() -> str:
     return os.environ["DATABASE_URL"]
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session_factory():
     engine = create_async_engine(_database_url(), pool_size=5, max_overflow=0)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -28,6 +29,8 @@ async def db_session_factory():
 async def test_chat_processing_lease_allows_only_one_owner(db_session_factory) -> None:
     chat_id = -910000001
     async with db_session_factory() as session:
+        await session.execute(ReplyDelivery.__table__.delete().where(ReplyDelivery.chat_id == chat_id))
+        await session.execute(Chat.__table__.delete().where(Chat.id == chat_id))
         await repo.get_or_create_chat(session, chat_id)
         await session.commit()
 
