@@ -121,6 +121,7 @@ class ChatCoalescer:
                     await self._send_result(chat_id, result)
                 except Exception:
                     logger.exception("Failed to deliver reply to chat %s", chat_id)
+                    await self._send_text(chat_id, ERROR_REPLY)
                     failed = True
                     break
 
