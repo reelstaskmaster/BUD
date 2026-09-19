@@ -62,6 +62,8 @@ async def run() -> None:
 
     try:
         await coalescer.recover_pending()
+        # Polling and webhooks are mutually exclusive; make the polling mode explicit.
+        await bot.delete_webhook(drop_pending_updates=False)
         logger.info("Starting polling")
         await dp.start_polling(bot)
     finally:
