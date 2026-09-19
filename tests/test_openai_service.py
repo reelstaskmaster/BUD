@@ -138,3 +138,29 @@ async def test_chat_rejects_empty_image_prompt() -> None:
     service.generate_image = fail_generate
     result = await service.chat(instructions="i", messages=[], tool_handler=handler)
     assert result.text == "ok"
+
+
+def test_to_input_item_rejects_unsupported_image_mime() -> None:
+    from app.services.openai_client import OpenAIInputMessage, _to_input_item
+
+    message = OpenAIInputMessage(
+        role="user",
+        text="look",
+        image_bytes=b"svg",
+        image_mime_type="image/svg+xml",
+    )
+    with pytest.raises(ValueError, match="Unsupported image MIME type"):
+        _to_input_item(message)
+
+
+def test_to_input_item_uses_persisted_supported_image_mime() -> None:
+    from app.services.openai_client import OpenAIInputMessage, _to_input_item
+
+    message = OpenAIInputMessage(
+        role="user",
+        text="look",
+        image_bytes=b"png",
+        image_mime_type="image/png",
+    )
+    item = _to_input_item(message)
+    assert item["content"][1]["image_url"].startswith("data:image/png;base64,")
