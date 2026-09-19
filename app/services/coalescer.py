@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import repositories as repo
 from app.db.models import Message
-from app.services.openai_client import ChatResult
+from app.services.openai_client import ChatResult, OpenAIQuotaError
 from app.db.models import ReplyDelivery
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ TYPING_INTERVAL_S = 4.0
 LEASE_RENEW_INTERVAL_S = 60.0
 DELIVERY_RETRY_INTERVAL_S = 30.0
 ERROR_REPLY = "Не получилось ответить, попробуй ещё раз."
+QUOTA_ERROR_REPLY = "Сейчас ИИ временно недоступен: закончился API-баланс. Попробуй позже."
 TELEGRAM_TEXT_LIMIT = 4096
 
 
@@ -208,6 +209,11 @@ class ChatCoalescer:
                 )
                 try:
                     result = await self.process_batch(chat_id, batch)
+                except OpenAIQuotaError:
+                    logger.warning("OpenAI quota exhausted for chat %s", chat_id)
+                    await self._send_quota_error_reply(chat_id)
+                    failed = True
+                    break
                 except Exception:
                     logger.exception("LLM processing failed for chat %s", chat_id)
                     await self._send_error_reply(chat_id)
@@ -323,6 +329,12 @@ class ChatCoalescer:
         for delivery in pending:
             if not await self._deliver_pending(delivery):
                 return
+
+    async def _send_quota_error_reply(self, chat_id: int) -> None:
+        try:
+            await self._send_text(chat_id, QUOTA_ERROR_REPLY)
+        except Exception:
+            logger.exception("Failed to send quota error reply to chat %s", chat_id)
 
     async def _send_error_reply(self, chat_id: int) -> None:
         try:
