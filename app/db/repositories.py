@@ -282,3 +282,15 @@ async def release_chat_processing(
         .where(Chat.id == chat_id, Chat.processing_owner == owner)
         .values(processing_owner=None, processing_until=None)
     )
+
+
+async def renew_chat_processing(
+    session: AsyncSession, chat_id: int, owner: str
+) -> bool:
+    result = await session.execute(
+        update(Chat)
+        .where(Chat.id == chat_id, Chat.processing_owner == owner)
+        .values(processing_until=func.now() + text("interval '15 minutes'"))
+        .returning(Chat.id)
+    )
+    return result.scalar_one_or_none() is not None
