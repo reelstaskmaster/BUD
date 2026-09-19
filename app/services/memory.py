@@ -119,11 +119,8 @@ class MemoryService:
         return f"Unknown tool: {name}"
 
     async def maintain(self, chat_id: int) -> None:
-        try:
-            await self._extract_from_recent_turn(chat_id)
-            await self._summarize_if_needed(chat_id)
-        except Exception:
-            logger.exception("Memory maintenance failed for chat %s", chat_id)
+        await self._extract_from_recent_turn(chat_id)
+        await self._summarize_if_needed(chat_id)
 
     async def _extract_from_recent_turn(self, chat_id: int) -> None:
         async with self.session_factory() as session:
