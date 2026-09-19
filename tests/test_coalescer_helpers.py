@@ -102,3 +102,14 @@ async def test_after_reply_failure_is_observed_and_does_not_escape() -> None:
     await asyncio.sleep(0)
     coalescer._log_background_failure(task)
     assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_send_error_reply_survives_telegram_failure() -> None:
+    class BrokenBot(FakeBot):
+        async def send_message(self, chat_id: int, text: str) -> None:
+            raise RuntimeError("telegram unavailable")
+
+    coalescer = make_coalescer(BrokenBot())
+
+    await coalescer._send_error_reply(123)
