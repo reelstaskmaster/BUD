@@ -84,14 +84,17 @@ async def run() -> None:
             )
             webhook_handler.register(app, path=settings.webhook_path)
             setup_application(app, dp, bot=bot)
-            await bot.set_webhook(webhook_url, secret_token=settings.webhook_secret)
-            logger.info("Starting webhook on %s", webhook_url)
 
             runner = web.AppRunner(app)
             await runner.setup()
             site = web.TCPSite(runner, host="0.0.0.0", port=settings.port)
             await site.start()
             try:
+                await bot.set_webhook(
+                    webhook_url,
+                    secret_token=settings.webhook_secret,
+                )
+                logger.info("Starting webhook on %s", webhook_url)
                 await asyncio.Event().wait()
             finally:
                 await runner.cleanup()
