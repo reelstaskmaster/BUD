@@ -271,6 +271,13 @@ class ChatCoalescer:
         except Exception:
             logger.exception("Chat processing lease heartbeat failed for chat %s", chat_id)
 
+    async def _recover_delivery_loop(self, chat_id: int) -> None:
+        async with self.session_factory() as session:
+            pending = await repo.list_pending_reply_deliveries(session, chat_id, limit=10)
+        for delivery in pending:
+            if not await self._deliver_pending(delivery):
+                return
+
     async def _send_error_reply(self, chat_id: int) -> None:
         try:
             await self._send_text(chat_id, ERROR_REPLY)
