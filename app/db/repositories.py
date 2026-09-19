@@ -5,7 +5,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Fact, Message, Summary
+from app.db.models import Chat, Fact, Message, ReplyDelivery, Summary
 
 
 async def get_or_create_chat(session: AsyncSession, chat_id: int) -> Chat:
@@ -294,3 +294,64 @@ async def renew_chat_processing(
         .returning(Chat.id)
     )
     return result.scalar_one_or_none() is not None
+
+    
+async def create_reply_delivery(
+    session: AsyncSession,
+    *,
+    chat_id: int,
+    source_message_ids: list[uuid.UUID],
+    content: str,
+    media_type: str,
+    image_bytes: bytes | None,
+) -> ReplyDelivery:
+    delivery = ReplyDelivery(
+        chat_id=chat_id,
+        source_message_ids=[str(item) for item in source_message_ids],
+        content=content,
+        media_type=media_type,
+        image_bytes=image_bytes,
+        status="pending",
+        attempts=0,
+    )
+    session.add(delivery)
+    await session.flush()
+    return delivery
+
+
+async def mark_reply_delivery_sent(
+    session: AsyncSession, delivery_id: uuid.UUID
+) -> None:
+    await session.execute(
+        update(ReplyDelivery)
+        .where(ReplyDelivery.id == delivery_id, ReplyDelivery.status == "pending")
+        .values(status="sent", sent_at=func.now())
+    )
+
+
+async def mark_reply_delivery_attempt(
+    session: AsyncSession, delivery_id: uuid.UUID, error: str
+) -> None:
+    await session.execute(
+        update(ReplyDelivery)
+        .where(ReplyDelivery.id == delivery_id, ReplyDelivery.status == "pending")
+        .values(
+            attempts=ReplyDelivery.attempts + 1,
+            last_error=error[:2000],
+        )
+    )
+
+
+async def list_pending_reply_deliveries(
+    session: AsyncSession, chat_id: int, limit: int = 5
+) -> list[ReplyDelivery]:
+    result = await session.scalars(
+        select(ReplyDelivery)
+        .where(
+            ReplyDelivery.chat_id == chat_id,
+            ReplyDelivery.status == "pending",
+        )
+        .order_by(ReplyDelivery.created_at.asc())
+        .limit(limit)
+    )
+    return list(result.all())
