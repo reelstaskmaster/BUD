@@ -31,7 +31,7 @@ def upgrade() -> None:
             'hex'
         )
         """
-    )    )
+    )
     op.alter_column("reply_deliveries", "delivery_key", nullable=False)
     op.create_index(
         "uq_reply_deliveries_key",
