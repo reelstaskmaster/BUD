@@ -93,3 +93,48 @@ def test_generate_image_result_is_base64_decodable() -> None:
     payload = b"png-bytes"
     encoded = base64.b64encode(payload).decode("ascii")
     assert base64.b64decode(encoded) == payload
+
+
+@pytest.mark.asyncio
+async def test_chat_normalizes_non_object_tool_arguments() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type("Settings", (), {"chat_model": "test"})()
+    service.client = FakeClient([
+        FakeResponse(
+            output=[FakeCall("remember_fact", "[\"bad\"]")],
+            response_id="r1",
+        ),
+        FakeResponse(output_text="ok", response_id="r2"),
+    ])
+    seen = []
+
+    async def handler(name, args):
+        seen.append((name, args))
+        return "ok"
+
+    result = await service.chat(instructions="i", messages=[], tool_handler=handler)
+    assert result.text == "ok"
+    assert seen == [("remember_fact", {})]
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_empty_image_prompt() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type("Settings", (), {"chat_model": "test"})()
+    service.client = FakeClient([
+        FakeResponse(
+            output=[FakeCall("generate_image", '{"prompt":"   "}')],
+            response_id="r1",
+        ),
+        FakeResponse(output_text="ok", response_id="r2"),
+    ])
+
+    async def handler(_name, _args):
+        raise AssertionError("generate_image must not use the generic handler")
+
+    async def fail_generate(_prompt):
+        raise AssertionError("image API must not be called")
+
+    service.generate_image = fail_generate
+    result = await service.chat(instructions="i", messages=[], tool_handler=handler)
+    assert result.text == "ok"
