@@ -64,6 +64,7 @@ async def run() -> None:
         logger.info("Starting polling")
         await dp.start_polling(bot)
     finally:
+        await coalescer.shutdown()
         await bot.session.close()
         await engine.dispose()
 
