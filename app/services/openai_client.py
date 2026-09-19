@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 import time
@@ -193,7 +194,7 @@ class OpenAIService:
                     raise AIProviderError("OpenRouter image generation returned no base64 image")
                 try:
                     return base64.b64decode(b64, validate=True)
-                except (ValueError, base64.binascii.Error) as exc:
+                except (ValueError, binascii.Error) as exc:
                     raise AIProviderError("OpenRouter image generation returned invalid base64") from exc
             except (httpx.RequestError, httpx.TimeoutException):
                 last_error = AIProviderError("OpenRouter image generation network error")
