@@ -181,6 +181,43 @@ async def test_lease_heartbeat_sets_loss_event(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_lease_heartbeat_marks_loss_on_database_error(monkeypatch) -> None:
+    bot = FakeBot()
+    monkeypatch.setattr("app.services.coalescer.LEASE_RENEW_INTERVAL_S", 0)
+
+    class SessionContext:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def commit(self): return None
+
+    class SessionFactory:
+        def __call__(self): return SessionContext()
+
+    coalescer = ChatCoalescer(
+        bot=bot,
+        session_factory=SessionFactory(),  # type: ignore[arg-type]
+        process_batch=None,  # type: ignore[arg-type]
+        debounce_s=0,
+    )
+    original = repo.renew_chat_processing
+
+    async def broken(session, chat_id, owner):
+        raise RuntimeError("db unavailable")
+
+    repo.renew_chat_processing = broken
+    try:
+        lost = asyncio.Event()
+        task = asyncio.create_task(coalescer._lease_heartbeat(123, lost))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert lost.is_set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    finally:
+        repo.renew_chat_processing = original
+
+
+@pytest.mark.asyncio
 async def test_delivery_retry_worker_survives_transient_error(monkeypatch) -> None:
     bot = FakeBot()
     calls = 0
