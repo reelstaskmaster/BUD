@@ -176,6 +176,8 @@ class ChatCoalescer:
         await self._send_text(chat_id, text or "…")
 
     async def _send_text(self, chat_id: int, text: str) -> None:
-        for start in range(0, max(len(text), 1), TELEGRAM_TEXT_LIMIT):
+        if not text:
+            return
+        for start in range(0, len(text), TELEGRAM_TEXT_LIMIT):
             chunk = text[start : start + TELEGRAM_TEXT_LIMIT]
             await self.bot.send_message(chat_id, chunk)
