@@ -306,23 +306,38 @@ async def create_reply_delivery(
     media_type: str,
     image_bytes: bytes | None,
 ) -> ReplyDelivery:
+    source_ids = [str(item) for item in source_message_ids]
     delivery_key = hashlib.sha256(
-        f"{chat_id}:{','.join(str(item) for item in source_message_ids)}".encode()
+        f"{chat_id}:{','.join(source_ids)}".encode()
     ).hexdigest()
-    delivery = ReplyDelivery(
-        delivery_key=delivery_key,
-        chat_id=chat_id,
-        source_message_ids=[str(item) for item in source_message_ids],
-        content=content,
-        media_type=media_type,
-        image_bytes=image_bytes,
-        status="pending",
-        attempts=0,
+    values = {
+        "delivery_key": delivery_key,
+        "chat_id": chat_id,
+        "source_message_ids": source_ids,
+        "content": content,
+        "media_type": media_type,
+        "image_bytes": image_bytes,
+        "status": "pending",
+        "attempts": 0,
+    }
+    result = await session.execute(
+        pg_insert(ReplyDelivery)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=[ReplyDelivery.delivery_key])
+        .returning(ReplyDelivery.id)
     )
-    session.add(delivery)
-    await session.flush()
+    delivery_id = result.scalar_one_or_none()
+    if delivery_id is None:
+        delivery = await session.scalar(
+            select(ReplyDelivery).where(ReplyDelivery.delivery_key == delivery_key)
+        )
+        if delivery is None:
+            raise RuntimeError("Reply delivery disappeared after conflict")
+        return delivery
+    delivery = await session.get(ReplyDelivery, delivery_id)
+    if delivery is None:
+        raise RuntimeError("Created reply delivery could not be loaded")
     return delivery
-
 
 async def mark_reply_delivery_sent(
     session: AsyncSession, delivery_id: uuid.UUID
