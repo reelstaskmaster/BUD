@@ -73,6 +73,12 @@ class ChatCoalescer:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._states.clear()
 
+    async def recover_pending(self) -> None:
+        async with self.session_factory() as session:
+            chat_ids = await repo.list_pending_reply_chat_ids(session)
+        for chat_id in chat_ids:
+            await self.notify(chat_id)
+
     async def notify(self, chat_id: int) -> None:
         state = self._state(chat_id)
         async with state.lock:
