@@ -358,6 +358,8 @@ def _provider_error(provider: str, exc: Exception) -> AIProviderError:
         status = getattr(exc, "status_code", None)
     if isinstance(exc, httpx.TimeoutException):
         return AIProviderError(f"{provider} timeout")
+    if isinstance(exc, httpx.RequestError):
+        return AIProviderError(f"{provider} network error")
     if status in {429, 500, 502, 503, 504}:
         return AIProviderError(f"{provider} temporarily unavailable ({status})")
     raise exc
