@@ -147,7 +147,10 @@ class ChatCoalescer:
                     break
 
                 if self.after_reply:
-                    asyncio.create_task(self.after_reply(chat_id))
+                    task = asyncio.create_task(
+                        self.after_reply(chat_id), name=f"after-reply-{chat_id}"
+                    )
+                    task.add_done_callback(self._log_background_failure)
                 break
         finally:
             async with state.lock:
@@ -164,6 +167,15 @@ class ChatCoalescer:
                     leftover = []
                 if leftover:
                     await self.notify(chat_id)
+
+    @staticmethod
+    def _log_background_failure(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Background after-reply task failed")
 
     async def _send_result(self, chat_id: int, result: ChatResult) -> None:
         text = result.text.strip() if result.text else ""
