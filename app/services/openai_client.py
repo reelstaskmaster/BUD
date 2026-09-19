@@ -98,6 +98,7 @@ class OpenAIInputMessage:
     role: str
     text: str
     image_bytes: bytes | None = None
+    image_mime_type: str | None = None
 
 
 class OpenAIService:
