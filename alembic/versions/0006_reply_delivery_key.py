@@ -18,13 +18,7 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE reply_deliveries
-        SET delivery_key = encode(
-            digest(
-                chat_id::text || ':' || source_message_ids::text,
-                'sha256'
-            ),
-            'hex'
-        )
+        SET delivery_key = md5(chat_id::text || ':' || source_message_ids::text)
         """
     )
     op.alter_column("reply_deliveries", "delivery_key", nullable=False)
