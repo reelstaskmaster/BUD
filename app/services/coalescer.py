@@ -23,6 +23,7 @@ AfterReply = Callable[[int], Awaitable[None]]
 
 TYPING_INTERVAL_S = 4.0
 LEASE_RENEW_INTERVAL_S = 60.0
+DELIVERY_RETRY_INTERVAL_S = 30.0
 ERROR_REPLY = "Не получилось ответить, попробуй ещё раз."
 TELEGRAM_TEXT_LIMIT = 4096
 
@@ -53,6 +54,7 @@ class ChatCoalescer:
         self.after_reply = after_reply
         self._states: dict[int, ChatState] = {}
         self._owner = uuid.uuid4().hex
+        self._retry_task: asyncio.Task[None] | None = None
 
     def _state(self, chat_id: int) -> ChatState:
         state = self._states.get(chat_id)
@@ -62,6 +64,10 @@ class ChatCoalescer:
         return state
 
     async def shutdown(self) -> None:
+        if self._retry_task and not self._retry_task.done():
+            self._retry_task.cancel()
+            await asyncio.gather(self._retry_task, return_exceptions=True)
+        self._retry_task = None
         states = list(self._states.values())
         tasks: list[asyncio.Task[None]] = []
         for state in states:
@@ -74,12 +80,35 @@ class ChatCoalescer:
         self._states.clear()
 
     async def recover_pending(self) -> None:
+        self._ensure_retry_worker()
         async with self.session_factory() as session:
             chat_ids = await repo.list_pending_reply_chat_ids(session)
         for chat_id in chat_ids:
             await self.notify(chat_id)
 
+    def _ensure_retry_worker(self) -> None:
+        if self._retry_task and not self._retry_task.done():
+            return
+        self._retry_task = asyncio.create_task(
+            self._delivery_retry_loop(), name="reply-delivery-retry"
+        )
+        self._retry_task.add_done_callback(self._log_background_failure)
+
+    async def _delivery_retry_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(DELIVERY_RETRY_INTERVAL_S)
+                async with self.session_factory() as session:
+                    chat_ids = await repo.list_pending_reply_chat_ids(session)
+                for chat_id in chat_ids:
+                    await self.notify(chat_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Reply delivery retry worker failed")
+
     async def notify(self, chat_id: int) -> None:
+        self._ensure_retry_worker()
         state = self._state(chat_id)
         async with state.lock:
             self._ensure_typing(chat_id, state)
