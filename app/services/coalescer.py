@@ -182,7 +182,11 @@ class ChatCoalescer:
                 pending = await repo.list_pending_reply_deliveries(session, chat_id, limit=10)
             if pending:
                 for delivery in pending:
-                    if not await self._deliver_pending(delivery):
+                    if lease_lost.is_set():
+                    logger.warning("Aborting delivery for chat %s after lease loss", chat_id)
+                    failed = True
+                    break
+                if not await self._deliver_pending(delivery):
                         failed = True
                         return
             while True:
@@ -201,8 +205,9 @@ class ChatCoalescer:
                 if not batch:
                     break
                 batch_ids = {message.id for message in batch}
+                lease_lost = asyncio.Event()
                 lease_task = asyncio.create_task(
-                    self._lease_heartbeat(chat_id),
+                    self._lease_heartbeat(chat_id, lease_lost),
                     name=f"lease-heartbeat-{chat_id}",
                 )
                 try:
@@ -216,6 +221,11 @@ class ChatCoalescer:
                     lease_task.cancel()
                     await asyncio.gather(lease_task, return_exceptions=True)
 
+                if lease_lost.is_set():
+                    logger.warning("Aborting reply for chat %s after lease loss", chat_id)
+                    failed = True
+                    break
+
                 async with self.session_factory() as session:
                     current = await repo.list_unanswered(session, chat_id)
                 extra_ids = {message.id for message in current} - batch_ids
@@ -224,6 +234,10 @@ class ChatCoalescer:
 
                 try:
                     async with self.session_factory() as session:
+                        if not await repo.renew_chat_processing(session, chat_id, self._owner):
+                            logger.warning("Lease lost before persisting reply for chat %s", chat_id)
+                            failed = True
+                            break
                         await repo.mark_answered(session, list(batch_ids))
                         await repo.add_message(
                             session,
@@ -285,7 +299,7 @@ class ChatCoalescer:
                 if leftover:
                     await self.notify(chat_id)
 
-    async def _lease_heartbeat(self, chat_id: int) -> None:
+    async def _lease_heartbeat(self, chat_id: int, lease_lost: asyncio.Event) -> None:
         try:
             while True:
                 await asyncio.sleep(LEASE_RENEW_INTERVAL_S)
@@ -296,6 +310,7 @@ class ChatCoalescer:
                     await session.commit()
                 if not renewed:
                     logger.warning("Chat processing lease lost for chat %s", chat_id)
+                    lease_lost.set()
                     return
         except asyncio.CancelledError:
             raise
