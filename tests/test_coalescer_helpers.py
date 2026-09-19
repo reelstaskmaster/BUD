@@ -2,6 +2,8 @@ import asyncio
 
 import pytest
 
+from app.db import repositories as repo
+
 from app.services.coalescer import ChatCoalescer, ChatResult, TELEGRAM_TEXT_LIMIT
 
 
@@ -133,3 +135,44 @@ def test_chat_coalescer_has_unique_process_owner() -> None:
     assert first._owner
     assert second._owner
     assert first._owner != second._owner
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_sets_loss_event() -> None:
+    bot = FakeBot()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def commit(self):
+            return None
+
+    class SessionFactory:
+        def __call__(self):
+            return SessionContext()
+
+    coalescer = ChatCoalescer(
+        bot=bot,
+        session_factory=SessionFactory(),  # type: ignore[arg-type]
+        process_batch=None,  # type: ignore[arg-type]
+        debounce_s=0,
+    )
+
+    original = repo.renew_chat_processing
+    try:
+        async def lost(session, chat_id, owner):
+            return False
+
+        repo.renew_chat_processing = lost
+        event = asyncio.Event()
+        task = asyncio.create_task(coalescer._lease_heartbeat(123, event))
+        await asyncio.sleep(0)
+        assert event.is_set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    finally:
+        repo.renew_chat_processing = original
