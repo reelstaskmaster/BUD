@@ -288,3 +288,68 @@ async def test_unavailable_provider_is_cooled_down() -> None:
 
     result = await service.chat(instructions="i", messages=[], tool_handler=handler)
     assert result.text == "router ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_round_robins_across_openrouter_keys() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "ai_providers": ["openrouter"],
+            "openrouter_api_key_pool": ["key-1", "key-2"],
+            "openai_api_key": "",
+        },
+    )()
+    service.openrouter = object()
+    service._openrouter_clients = ["client-1", "client-2"]
+    seen = []
+
+    async def openrouter(_instructions, _messages, _handler, client=None):
+        seen.append(client)
+        return type("Result", (), {"text": client})()
+
+    service._chat_openrouter = openrouter
+
+    async def handler(_name, _args):
+        return "ok"
+
+    first = await service.chat(instructions="i", messages=[], tool_handler=handler)
+    second = await service.chat(instructions="i", messages=[], tool_handler=handler)
+
+    assert [first.text, second.text] == ["client-1", "client-2"]
+
+
+@pytest.mark.asyncio
+async def test_chat_skips_cooled_key_and_uses_next_openrouter_key() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "ai_providers": ["openrouter"],
+            "openrouter_api_key_pool": ["key-1", "key-2"],
+            "openai_api_key": "",
+        },
+    )()
+    service.openrouter = object()
+    service._openrouter_clients = ["client-1", "client-2"]
+    seen = []
+
+    async def openrouter(_instructions, _messages, _handler, client=None):
+        seen.append(client)
+        if client == "client-1":
+            from app.services.openai_client import AIProviderError
+            raise AIProviderError("rate limited")
+        return type("Result", (), {"text": "ok"})()
+
+    service._chat_openrouter = openrouter
+
+    async def handler(_name, _args):
+        return "ok"
+
+    result = await service.chat(instructions="i", messages=[], tool_handler=handler)
+
+    assert result.text == "ok"
+    assert seen == ["client-1", "client-2"]
