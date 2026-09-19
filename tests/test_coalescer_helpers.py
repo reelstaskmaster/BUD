@@ -68,3 +68,15 @@ async def test_send_result_uses_placeholder_for_empty_text() -> None:
     await coalescer._send_result(123, ChatResult(text=""))
 
     assert bot.messages == [(123, "…")]
+
+
+@pytest.mark.asyncio
+async def test_send_result_image_caption_is_not_duplicated_after_1024() -> None:
+    bot = FakeBot()
+    coalescer = make_coalescer(bot)
+    text = "a" * 1024
+
+    await coalescer._send_result(123, ChatResult(text=text, image_bytes=b"image"))
+
+    assert bot.photos[0][2] == text
+    assert bot.messages == []
