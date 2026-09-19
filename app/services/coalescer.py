@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.enums import ChatAction
 from aiogram.types import BufferedInputFile
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -357,7 +358,14 @@ class ChatCoalescer:
         if result.image_bytes:
             photo = BufferedInputFile(result.image_bytes, filename="image.png")
             caption = text[:1024] if text else None
-            await self.bot.send_photo(chat_id, photo, caption=caption)
+            for attempt in range(3):
+                try:
+                    await self.bot.send_photo(chat_id, photo, caption=caption)
+                    break
+                except TelegramRetryAfter as exc:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(exc.retry_after)
             if len(text) > 1024:
                 await self._send_text(chat_id, text[1024:])
             return
@@ -368,4 +376,11 @@ class ChatCoalescer:
             return
         for start in range(0, len(text), TELEGRAM_TEXT_LIMIT):
             chunk = text[start : start + TELEGRAM_TEXT_LIMIT]
-            await self.bot.send_message(chat_id, chunk)
+            for attempt in range(3):
+                try:
+                    await self.bot.send_message(chat_id, chunk)
+                    break
+                except TelegramRetryAfter as exc:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(exc.retry_after)
