@@ -95,17 +95,17 @@ class ChatCoalescer:
         self._retry_task.add_done_callback(self._log_background_failure)
 
     async def _delivery_retry_loop(self) -> None:
-        try:
-            while True:
+        while True:
+            try:
                 await asyncio.sleep(DELIVERY_RETRY_INTERVAL_S)
                 async with self.session_factory() as session:
                     chat_ids = await repo.list_pending_reply_chat_ids(session)
                 for chat_id in chat_ids:
                     await self.notify(chat_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Reply delivery retry worker failed")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Reply delivery retry iteration failed")
 
     async def notify(self, chat_id: int) -> None:
         self._ensure_retry_worker()
