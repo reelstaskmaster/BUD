@@ -57,7 +57,11 @@ jobs:
 
       - name: Validate Alembic metadata
         run: >-
-          python -c "import importlib.util; p=\"alembic/versions/0001_initial.py\";
-          s=importlib.util.spec_from_file_location(\"initial\", p);
-          m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
-          assert m.revision == \"0001_initial\" and m.down_revision is None"
+          python -c "import importlib.util;
+          specs=[('0001_initial','alembic/versions/0001_initial.py'),('0002_message_media_mime','alembic/versions/0002_message_media_mime.py')];
+          mods=[];
+          for name,p in specs:
+          s=importlib.util.spec_from_file_location(name,p);
+          m=importlib.util.module_from_spec(s); s.loader.exec_module(m); mods.append(m);
+          assert mods[0].revision == '0001_initial' and mods[0].down_revision is None;
+          assert mods[1].revision == '0002_message_media_mime' and mods[1].down_revision == '0001_initial'"
