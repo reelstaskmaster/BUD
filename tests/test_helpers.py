@@ -50,3 +50,8 @@ def test_to_input_item_encodes_image_as_data_url() -> None:
 def test_to_input_item_keeps_assistant_message_text() -> None:
     result = _to_input_item(OpenAIInputMessage(role="assistant", text="Ответ"))
     assert result == {"role": "assistant", "content": "Ответ"}
+
+
+def test_to_input_item_empty_user_text_is_safe() -> None:
+    result = _to_input_item(OpenAIInputMessage(role="user", text=""))
+    assert result == {"role": "user", "content": ""}
