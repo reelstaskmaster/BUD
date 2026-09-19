@@ -137,7 +137,7 @@ class OpenAIService:
         *,
         reference_image: tuple[bytes, str] | None = None,
     ) -> bytes:
-        """Generate or edit an image, preferring the configured OpenRouter image API."""
+        """Generate/edit via OpenRouter, then fall back to OpenAI."""
         openrouter_keys = self._real_api_keys("openrouter")
         last_error: Exception | None = None
 
@@ -177,37 +177,41 @@ class OpenAIService:
 
                 data = response.json()
                 items = data.get("data") or []
-                if not items:
+                if not items or not items[0].get("b64_json"):
                     raise AIProviderError("OpenRouter image generation returned no image data")
-                b64 = items[0].get("b64_json")
-                if not b64:
-                    raise AIProviderError("OpenRouter image generation returned no base64 image")
-                return base64.b64decode(b64)
+                return base64.b64decode(items[0]["b64_json"])
             except (httpx.RequestError, httpx.TimeoutException):
                 last_error = AIProviderError("OpenRouter image generation network error")
                 self._cool_down_key("openrouter", index, 30.0)
             except AIProviderError as exc:
                 last_error = exc
 
-        if not openrouter_keys:
-            response = await self.client.images.generate(
-                model=self.settings.image_model,
-                prompt=prompt,
-                size="1024x1024",
-                n=1,
-            )
-            item = response.data[0]
-            b64 = getattr(item, "b64_json", None)
-            if b64:
-                return base64.b64decode(b64)
-            url = getattr(item, "url", None)
-            if url:
-                async with httpx.AsyncClient(timeout=60) as http:
-                    downloaded = await http.get(url)
-                    downloaded.raise_for_status()
-                    return downloaded.content
-            raise RuntimeError("Image generation returned neither b64 nor url")
+        # OpenRouter is preferred, but an unavailable OpenRouter key/model must
+        # not prevent BUD from using the legacy OpenAI image provider.
+        openai_keys = self._real_api_keys("openai")
+        if openai_keys and not reference_image:
+            try:
+                response = await self.client.images.generate(
+                    model=self.settings.image_model,
+                    prompt=prompt,
+                    size="1024x1024",
+                    n=1,
+                )
+                item = response.data[0]
+                b64 = getattr(item, "b64_json", None)
+                if b64:
+                    return base64.b64decode(b64)
+                url = getattr(item, "url", None)
+                if url:
+                    async with httpx.AsyncClient(timeout=60) as http:
+                        downloaded = await http.get(url)
+                        downloaded.raise_for_status()
+                        return downloaded.content
+            except Exception as exc:
+                last_error = AIProviderError(f"OpenAI image generation unavailable: {exc}")
 
+        if not openrouter_keys and not openai_keys:
+            raise AIProviderError("No image generation provider is configured")
         raise last_error or AIProviderError("Image generation unavailable")
 
     async def summarize(self, transcript: str) -> str:
