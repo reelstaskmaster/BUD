@@ -112,12 +112,14 @@ class ChatCoalescer:
         state = self._state(chat_id)
         failed = False
         claimed = False
+        lease_held = False
         try:
             await asyncio.sleep(self.debounce_s)
             async with self.session_factory() as session:
                 claimed = await repo.claim_chat_processing(
                     session, chat_id, self._owner
                 )
+                lease_held = claimed
                 await session.commit()
             if not claimed:
                 return
@@ -127,6 +129,7 @@ class ChatCoalescer:
                         session, chat_id, self._owner
                     )
                     if claimed:
+                        lease_held = True
                         batch = await repo.list_unanswered(session, chat_id)
                     else:
                         batch = []
@@ -184,7 +187,7 @@ class ChatCoalescer:
                     task.add_done_callback(self._log_background_failure)
                 break
         finally:
-            if claimed:
+            if lease_held:
                 try:
                     async with self.session_factory() as session:
                         await repo.release_chat_processing(
