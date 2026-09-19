@@ -89,6 +89,8 @@ class MemoryService:
         return "Fact stored."
 
     async def forget_fact(self, session: AsyncSession, chat_id: int, query: str) -> str:
+        if not query.strip():
+            return "Nothing to forget."
         embedding = await self.openai.embed(query)
         matches = await repo.similar_facts(
             session, chat_id, embedding, limit=8, active_only=True
