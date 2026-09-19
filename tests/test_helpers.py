@@ -55,3 +55,15 @@ def test_to_input_item_keeps_assistant_message_text() -> None:
 def test_to_input_item_empty_user_text_is_safe() -> None:
     result = _to_input_item(OpenAIInputMessage(role="user", text=""))
     assert result == {"role": "user", "content": ""}
+
+
+def test_to_input_item_uses_source_image_mime_type() -> None:
+    result = _to_input_item(
+        OpenAIInputMessage(
+            role="user",
+            text="Что здесь?",
+            image_bytes=b"abc",
+            image_mime_type="image/png",
+        )
+    )
+    assert result["content"][1]["image_url"].startswith("data:image/png;base64,")
