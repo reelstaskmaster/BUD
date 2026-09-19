@@ -130,9 +130,9 @@ class ChatCoalescer:
                 await session.commit()
             return False
         async with self.session_factory() as session:
-            await repo.mark_reply_delivery_sent(session, delivery.id)
+            marked = await repo.mark_reply_delivery_sent(session, delivery.id)
             await session.commit()
-        return True
+        return marked
 
     async def _process_loop(self, chat_id: int) -> None:
         state = self._state(chat_id)
