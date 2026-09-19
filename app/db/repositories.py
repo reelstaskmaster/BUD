@@ -1,6 +1,6 @@
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -371,6 +371,7 @@ async def list_pending_reply_deliveries(
         .where(
             ReplyDelivery.chat_id == chat_id,
             ReplyDelivery.status == "pending",
+            ReplyDelivery.next_attempt_at <= func.now(),
         )
         .order_by(ReplyDelivery.created_at.asc())
         .limit(limit)
