@@ -112,7 +112,7 @@ class OpenAIInputMessage:
 class OpenAIService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
 
     async def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
         if not audio:
