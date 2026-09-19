@@ -164,3 +164,64 @@ def test_to_input_item_uses_persisted_supported_image_mime() -> None:
     )
     item = _to_input_item(message)
     assert item["content"][1]["image_url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
+async def test_chat_falls_back_from_gemini_to_openrouter() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "ai_providers": ["gemini", "openrouter", "openai"],
+            "gemini_api_key": "gemini-key",
+            "openai_api_key": "",
+        },
+    )()
+    service.openrouter = object()
+
+    async def gemini(_instructions, _messages, _handler):
+        from app.services.openai_client import AIProviderError
+        raise AIProviderError("Gemini timeout")
+
+    async def openrouter(_instructions, _messages, _handler):
+        return type("Result", (), {"text": "router ok"})()
+
+    service._chat_gemini = gemini
+    service._chat_openrouter = openrouter
+
+    async def handler(_name, _args):
+        return "ok"
+
+    result = await service.chat(instructions="i", messages=[], tool_handler=handler)
+    assert result.text == "router ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_does_not_fallback_on_bad_request() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "ai_providers": ["gemini", "openrouter"],
+            "gemini_api_key": "gemini-key",
+            "openai_api_key": "",
+        },
+    )()
+    service.openrouter = object()
+
+    async def gemini(_instructions, _messages, _handler):
+        raise ValueError("bad request")
+
+    async def openrouter(_instructions, _messages, _handler):
+        raise AssertionError("must not fall back on a bad request")
+
+    service._chat_gemini = gemini
+    service._chat_openrouter = openrouter
+
+    async def handler(_name, _args):
+        return "ok"
+
+    with pytest.raises(ValueError, match="bad request"):
+        await service.chat(instructions="i", messages=[], tool_handler=handler)
