@@ -30,6 +30,7 @@ class ChatState:
     busy: bool = False
     stop_typing: asyncio.Event = field(default_factory=asyncio.Event)
     typing_task: asyncio.Task[None] | None = None
+    process_task: asyncio.Task[None] | None = None
 
 
 class ChatCoalescer:
@@ -62,9 +63,10 @@ class ChatCoalescer:
             self._ensure_typing(chat_id, state)
             if not state.busy:
                 state.busy = True
-                asyncio.create_task(
+                state.process_task = asyncio.create_task(
                     self._process_loop(chat_id), name=f"coalesce-{chat_id}"
                 )
+                state.process_task.add_done_callback(self._log_background_failure)
 
     def _ensure_typing(self, chat_id: int, state: ChatState) -> None:
         if state.typing_task and not state.typing_task.done():
@@ -107,7 +109,7 @@ class ChatCoalescer:
                     result = await self.process_batch(chat_id, batch)
                 except Exception:
                     logger.exception("LLM processing failed for chat %s", chat_id)
-                    await self._send_text(chat_id, ERROR_REPLY)
+                    await self._send_error_reply(chat_id)
                     failed = True
                     break
 
@@ -121,7 +123,7 @@ class ChatCoalescer:
                     await self._send_result(chat_id, result)
                 except Exception:
                     logger.exception("Failed to deliver reply to chat %s", chat_id)
-                    await self._send_text(chat_id, ERROR_REPLY)
+                    await self._send_error_reply(chat_id)
                     failed = True
                     break
 
@@ -155,6 +157,7 @@ class ChatCoalescer:
         finally:
             async with state.lock:
                 state.busy = False
+                state.process_task = None
                 self._stop_typing(state)
             if not failed:
                 try:
@@ -167,6 +170,12 @@ class ChatCoalescer:
                     leftover = []
                 if leftover:
                     await self.notify(chat_id)
+
+    async def _send_error_reply(self, chat_id: int) -> None:
+        try:
+            await self._send_text(chat_id, ERROR_REPLY)
+        except Exception:
+            logger.exception("Failed to send error reply to chat %s", chat_id)
 
     @staticmethod
     def _log_background_failure(task: asyncio.Task[None]) -> None:
