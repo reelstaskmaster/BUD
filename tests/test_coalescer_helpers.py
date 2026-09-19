@@ -43,7 +43,7 @@ async def test_send_text_skips_empty_text() -> None:
 
     await coalescer._send_text(123, "")
 
-    assert bot.messages == [(123, "")]
+    assert bot.messages == []
 
 
 @pytest.mark.asyncio
