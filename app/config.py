@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     telegram_bot_token: str
+    bot_mode: str = "polling"
+    webhook_base_url: str = ""
+    webhook_path: str = "/telegram/webhook"
+    webhook_secret: str = ""
+    port: int = Field(default=8080, ge=1, le=65535)
     openai_api_key: str = ""
     gemini_api_key: str = ""
     openrouter_api_key: str = ""
