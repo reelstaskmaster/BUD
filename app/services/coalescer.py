@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db import repositories as repo
 from app.db.models import Message
 from app.services.openai_client import ChatResult
+from app.db.models import ReplyDelivery
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,24 @@ class ChatCoalescer:
             except asyncio.TimeoutError:
                 continue
 
+    async def _deliver_pending(self, delivery: ReplyDelivery) -> bool:
+        try:
+            result = ChatResult(
+                text=delivery.content,
+                image_bytes=delivery.image_bytes,
+            )
+            await self._send_result(delivery.chat_id, result)
+        except Exception as exc:
+            logger.exception("Failed to deliver reply delivery %s", delivery.id)
+            async with self.session_factory() as session:
+                await repo.mark_reply_delivery_attempt(session, delivery.id, repr(exc))
+                await session.commit()
+            return False
+        async with self.session_factory() as session:
+            await repo.mark_reply_delivery_sent(session, delivery.id)
+            await session.commit()
+        return True
+
     async def _process_loop(self, chat_id: int) -> None:
         state = self._state(chat_id)
         failed = False
@@ -123,6 +142,11 @@ class ChatCoalescer:
                 lease_held = claimed
                 await session.commit()
             if not claimed:
+                return
+            async with self.session_factory() as session:
+                pending = await repo.list_pending_reply_deliveries(session, chat_id, limit=1)
+            if pending and not await self._deliver_pending(pending[0]):
+                failed = True
                 return
             while True:
                 async with self.session_factory() as session:
