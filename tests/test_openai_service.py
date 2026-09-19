@@ -225,3 +225,35 @@ async def test_chat_does_not_fallback_on_bad_request() -> None:
 
     with pytest.raises(ValueError, match="bad request"):
         await service.chat(instructions="i", messages=[], tool_handler=handler)
+
+
+@pytest.mark.asyncio
+async def test_provider_network_error_is_fallbackable() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "ai_providers": ["gemini", "openrouter"],
+            "gemini_api_key": "gemini-key",
+            "openai_api_key": "",
+        },
+    )()
+    service.openrouter = object()
+
+    async def gemini(_instructions, _messages, _handler):
+        import httpx
+        from app.services.openai_client import _provider_error
+        raise _provider_error("Gemini", httpx.ConnectError("offline"))
+
+    async def openrouter(_instructions, _messages, _handler):
+        return type("Result", (), {"text": "router ok"})()
+
+    service._chat_gemini = gemini
+    service._chat_openrouter = openrouter
+
+    async def handler(_name, _args):
+        return "ok"
+
+    result = await service.chat(instructions="i", messages=[], tool_handler=handler)
+    assert result.text == "router ok"
