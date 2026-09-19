@@ -292,15 +292,22 @@ class OpenAIService:
     def _next_key_index(self, provider: str, count: int) -> int:
         if count <= 1:
             return 0
-        index = self._provider_next_index.get(provider, 0) % count
-        self._provider_next_index[provider] = (index + 1) % count
+        next_indexes = getattr(self, "_provider_next_index", None)
+        if next_indexes is None:
+            next_indexes = self._provider_next_index = {}
+        index = next_indexes.get(provider, 0) % count
+        next_indexes[provider] = (index + 1) % count
         return index
 
     def _key_is_cooling(self, provider: str, index: int) -> bool:
-        return self._key_cooldowns.get((provider, index), 0.0) > time.monotonic()
+        cooldowns = getattr(self, "_key_cooldowns", None) or {}
+        return cooldowns.get((provider, index), 0.0) > time.monotonic()
 
     def _cool_down_key(self, provider: str, index: int, seconds: float = 30.0) -> None:
-        self._key_cooldowns[(provider, index)] = time.monotonic() + seconds
+        cooldowns = getattr(self, "_key_cooldowns", None)
+        if cooldowns is None:
+            cooldowns = self._key_cooldowns = {}
+        cooldowns[(provider, index)] = time.monotonic() + seconds
 
     def _openai_client(self, index: int) -> AsyncOpenAI:
         clients = getattr(self, "_openai_clients", None) or [self.client]
