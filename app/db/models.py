@@ -38,6 +38,7 @@ class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
         Index("ix_messages_chat_created", "chat_id", "created_at"),
+        Index("uq_messages_telegram_id", "chat_id", "telegram_message_id", unique=True),
         Index(
             "ix_messages_unanswered",
             "chat_id",
@@ -52,6 +53,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     media_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     telegram_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     media_mime_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     answered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
