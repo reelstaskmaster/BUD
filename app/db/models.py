@@ -54,6 +54,7 @@ class Message(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    delivery_key: Mapped[str] = mapped_column(String(64), nullable=False)
     chat_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
     )
@@ -75,6 +76,7 @@ class ReplyDelivery(Base):
     __tablename__ = "reply_deliveries"
     __table_args__ = (
         Index("ix_reply_deliveries_chat_status", "chat_id", "status"),
+        Index("uq_reply_deliveries_key", "delivery_key", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
