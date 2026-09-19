@@ -36,3 +36,16 @@ def test_rejects_excessive_debounce() -> None:
             openai_api_key="key",
             coalesce_debounce_ms=60_001,
         )
+
+
+def test_api_key_pools_prefer_plural_configuration() -> None:
+    settings = Settings(
+        telegram_bot_token="token",
+        openai_api_key="legacy-key",
+        openai_api_keys=" key-1, key-2 ,, key-3 ",
+        gemini_api_keys="gemini-1,gemini-2",
+        openrouter_api_key="router-1",
+    )
+    assert settings.openai_api_key_pool == ["key-1", "key-2", "key-3"]
+    assert settings.gemini_api_key_pool == ["gemini-1", "gemini-2"]
+    assert settings.openrouter_api_key_pool == ["router-1"]

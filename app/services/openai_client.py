@@ -91,17 +91,18 @@ class OpenAIInputMessage:
 class OpenAIService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
+        openai_keys = getattr(settings, "openai_api_key_pool", None) or ([settings.openai_api_key] if settings.openai_api_key else [])
+        openrouter_keys = getattr(settings, "openrouter_api_key_pool", None) or ([settings.openrouter_api_key] if settings.openrouter_api_key else [])
+        self._openai_clients = [AsyncOpenAI(api_key=key, max_retries=0) for key in openai_keys]
+        self.client = self._openai_clients[0] if self._openai_clients else AsyncOpenAI(api_key="", max_retries=0)
+        self._openrouter_clients = [
+            AsyncOpenAI(api_key=key, base_url="https://openrouter.ai/api/v1", max_retries=0)
+            for key in openrouter_keys
+        ]
+        self.openrouter = self._openrouter_clients[0] if self._openrouter_clients else None
         self._provider_cooldowns: dict[str, float] = {}
-        self.openrouter = (
-            AsyncOpenAI(
-                api_key=settings.openrouter_api_key,
-                base_url="https://openrouter.ai/api/v1",
-                max_retries=0,
-            )
-            if settings.openrouter_api_key
-            else None
-        )
+        self._key_cooldowns: dict[tuple[str, int], float] = {}
+        self._provider_next_index: dict[str, int] = {}
 
     async def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
         if not audio:
@@ -206,50 +207,123 @@ class OpenAIService:
             return await self._chat_openai(instructions, messages, tool_handler)
 
         last_error: Exception | None = None
+        provider_pools = {
+            "gemini": self._configured_keys("gemini"),
+            "openrouter": self._configured_keys("openrouter"),
+            "openai": self._configured_keys("openai"),
+        }
         for provider in self.settings.ai_providers:
             cooldowns = getattr(self, "_provider_cooldowns", None)
             if cooldowns is None:
                 cooldowns = self._provider_cooldowns = {}
-            cooldown_until = cooldowns.get(provider, 0.0)
-            if cooldown_until > time.monotonic():
+            if cooldowns.get(provider, 0.0) > time.monotonic():
                 logger.info("AI provider %s is cooling down", provider)
                 continue
             cooldowns.pop(provider, None)
-            if provider == "gemini" and self.settings.gemini_api_key:
+
+            keys = provider_pools.get(provider, [])
+            if not keys:
+                continue
+            start_index = self._next_key_index(provider, len(keys))
+            attempted = 0
+            successful_key = False
+
+            for offset in range(len(keys)):
+                index = (start_index + offset) % len(keys)
+                if self._key_is_cooling(provider, index):
+                    continue
+                attempted += 1
                 try:
-                    logger.info("AI provider: gemini")
-                    return await self._chat_gemini(instructions, messages, tool_handler)
-                except AIProviderError as exc:
-                    last_error = exc
-                    self._cool_down(provider)
-                    logger.warning("Gemini unavailable; falling back: %s", exc)
-            elif provider == "openrouter" and self.openrouter:
-                try:
-                    logger.info("AI provider: openrouter")
-                    return await self._chat_openrouter(instructions, messages, tool_handler)
-                except AIProviderError as exc:
-                    last_error = exc
-                    self._cool_down(provider)
-                    logger.warning("OpenRouter unavailable; falling back: %s", exc)
-            elif provider == "openai" and self.settings.openai_api_key:
-                try:
-                    logger.info("AI provider: openai")
-                    return await self._chat_openai(instructions, messages, tool_handler)
+                    logger.info("AI provider: %s key=%d/%d", provider, index + 1, len(keys))
+                    if provider == "gemini":
+                        if len(keys) == 1:
+                            result = await self._chat_gemini(instructions, messages, tool_handler)
+                        else:
+                            result = await self._chat_gemini(instructions, messages, tool_handler, api_key=keys[index])
+                    elif provider == "openrouter":
+                        client = self._openrouter_client(index)
+                        if len(keys) == 1:
+                            result = await self._chat_openrouter(instructions, messages, tool_handler)
+                        else:
+                            result = await self._chat_openrouter(instructions, messages, tool_handler, client=client)
+                    elif provider == "openai":
+                        client = self._openai_client(index)
+                        if len(keys) == 1:
+                            result = await self._chat_openai(instructions, messages, tool_handler)
+                        else:
+                            result = await self._chat_openai(instructions, messages, tool_handler, client=client)
+                    else:
+                        continue
+                    successful_key = True
+                    return result
                 except OpenAIQuotaError as exc:
                     last_error = exc
-                    self._cool_down(provider, 300.0)
-                    logger.warning("OpenAI quota exhausted; cooling provider down")
+                    self._cool_down_key(provider, index, 300.0)
+                    logger.warning("%s key %d quota exhausted; trying next key", provider, index + 1)
                 except RateLimitError as exc:
                     last_error = exc
-                    self._cool_down(provider)
-                    logger.warning("OpenAI rate limited; falling back")
+                    self._cool_down_key(provider, index)
+                    logger.warning("%s key %d rate limited; trying next key", provider, index + 1)
                 except (APIConnectionError, APITimeoutError) as exc:
-                    last_error = AIProviderError(f"OpenAI temporarily unavailable: {exc}")
-                    self._cool_down(provider)
-                    logger.warning("OpenAI unavailable; falling back")
+                    last_error = AIProviderError(f"{provider} temporarily unavailable: {exc}")
+                    self._cool_down_key(provider, index)
+                    logger.warning("%s key %d unavailable; trying next key", provider, index + 1)
+                except AIProviderError as exc:
+                    last_error = exc
+                    self._cool_down_key(provider, index)
+                    logger.warning("%s key %d unavailable; trying next key: %s", provider, index + 1, exc)
+
+            if attempted and not successful_key:
+                self._cool_down(provider)
+
         if last_error:
             raise last_error
         raise AIProviderError("No AI provider is configured")
+
+    def _configured_keys(self, provider: str) -> list[str]:
+        pool_attr = f"{provider}_api_key_pool"
+        singular_attr = f"{provider}_api_key"
+        pool = getattr(self.settings, pool_attr, None)
+        if pool:
+            return list(pool)
+        key = getattr(self.settings, singular_attr, "")
+        if key:
+            return [key]
+        # Preserve lightweight test doubles/legacy callers that expose only
+        # an already-created OpenRouter client.
+        if provider == "openrouter" and getattr(self, "openrouter", None):
+            return ["__configured_client__"]
+        return []
+
+    def _next_key_index(self, provider: str, count: int) -> int:
+        if count <= 1:
+            return 0
+        next_indexes = getattr(self, "_provider_next_index", None)
+        if next_indexes is None:
+            next_indexes = self._provider_next_index = {}
+        index = next_indexes.get(provider, 0) % count
+        next_indexes[provider] = (index + 1) % count
+        return index
+
+    def _key_is_cooling(self, provider: str, index: int) -> bool:
+        cooldowns = getattr(self, "_key_cooldowns", None) or {}
+        return cooldowns.get((provider, index), 0.0) > time.monotonic()
+
+    def _cool_down_key(self, provider: str, index: int, seconds: float = 30.0) -> None:
+        cooldowns = getattr(self, "_key_cooldowns", None)
+        if cooldowns is None:
+            cooldowns = self._key_cooldowns = {}
+        cooldowns[(provider, index)] = time.monotonic() + seconds
+
+    def _openai_client(self, index: int) -> AsyncOpenAI:
+        clients = getattr(self, "_openai_clients", None) or [self.client]
+        return clients[index % len(clients)]
+
+    def _openrouter_client(self, index: int) -> AsyncOpenAI:
+        clients = getattr(self, "_openrouter_clients", None) or ([self.openrouter] if self.openrouter else [])
+        if not clients:
+            raise AIProviderError("OpenRouter API key is missing")
+        return clients[index % len(clients)]
 
     def _cool_down(self, provider: str, seconds: float = 30.0) -> None:
         self._provider_cooldowns[provider] = time.monotonic() + seconds
@@ -259,7 +333,9 @@ class OpenAIService:
         instructions: str,
         messages: list[OpenAIInputMessage],
         tool_handler: ToolHandler,
+        client: AsyncOpenAI | None = None,
     ) -> ChatResult:
+        client = client or self.client
         openai_input = [_to_input_item(message) for message in messages]
         image_bytes: bytes | None = None
         image_prompt: str | None = None
@@ -276,7 +352,7 @@ class OpenAIService:
                 kwargs["previous_response_id"] = previous_response_id
                 kwargs.pop("instructions", None)
             try:
-                response = await self.client.responses.create(**kwargs)
+                response = await client.responses.create(**kwargs)
             except RateLimitError as exc:
                 if _is_insufficient_quota(exc):
                     raise OpenAIQuotaError("OpenAI API quota is exhausted") from exc
@@ -292,8 +368,15 @@ class OpenAIService:
             current_input = outputs
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
-    async def _chat_openrouter(self, instructions: str, messages: list[OpenAIInputMessage], tool_handler: ToolHandler) -> ChatResult:
-        if not self.openrouter:
+    async def _chat_openrouter(
+        self,
+        instructions: str,
+        messages: list[OpenAIInputMessage],
+        tool_handler: ToolHandler,
+        client: AsyncOpenAI | None = None,
+    ) -> ChatResult:
+        client = client or self.openrouter
+        if not client:
             raise AIProviderError("OpenRouter API key is missing")
         history: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
         history.extend(_to_chat_message(message) for message in messages)
@@ -301,7 +384,7 @@ class OpenAIService:
         image_prompt: str | None = None
         for _ in range(8):
             try:
-                response = await self.openrouter.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=self.settings.openrouter_chat_model,
                     messages=history,
                     tools=[_to_openai_chat_tool(tool) for tool in CHAT_TOOLS],
@@ -317,13 +400,20 @@ class OpenAIService:
                 history.append({"role": "tool", "tool_call_id": call.id, "content": tool_output})
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
-    async def _chat_gemini(self, instructions: str, messages: list[OpenAIInputMessage], tool_handler: ToolHandler) -> ChatResult:
+    async def _chat_gemini(
+        self,
+        instructions: str,
+        messages: list[OpenAIInputMessage],
+        tool_handler: ToolHandler,
+        api_key: str | None = None,
+    ) -> ChatResult:
+        api_key = api_key or self.settings.gemini_api_key
         contents = [_to_gemini_message(message) for message in messages]
         tools = [{"functionDeclarations": [_to_gemini_tool(tool) for tool in CHAT_TOOLS]}]
         image_bytes: bytes | None = None
         image_prompt: str | None = None
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.settings.gemini_chat_model}:generateContent"
-        headers = {"x-goog-api-key": self.settings.gemini_api_key}
+        headers = {"x-goog-api-key": api_key}
         async with httpx.AsyncClient(timeout=60) as http:
             for _ in range(8):
                 payload = {"systemInstruction": {"parts": [{"text": instructions}]}, "contents": contents, "tools": tools}
@@ -381,7 +471,7 @@ def _provider_error(provider: str, exc: Exception) -> AIProviderError:
         return AIProviderError(f"{provider} timeout")
     if isinstance(exc, httpx.RequestError):
         return AIProviderError(f"{provider} network error")
-    if status in {429, 500, 502, 503, 504}:
+    if status in {401, 402, 403, 408, 429, 500, 502, 503, 504, 524, 529}:
         return AIProviderError(f"{provider} temporarily unavailable ({status})")
     raise exc
 
