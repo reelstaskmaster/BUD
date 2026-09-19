@@ -35,16 +35,44 @@ async def add_message(
     answered: bool = False,
 ) -> Message:
     await get_or_create_chat(session, chat_id)
-    message = Message(
-        chat_id=chat_id,
-        role=role,
-        content=content,
-        media_type=media_type,
-        telegram_message_id=telegram_message_id,
-        telegram_file_id=telegram_file_id,
-        media_mime_type=media_mime_type,
-        answered=answered,
-    )
+    values = {
+        "chat_id": chat_id,
+        "role": role,
+        "content": content,
+        "media_type": media_type,
+        "telegram_message_id": telegram_message_id,
+        "telegram_file_id": telegram_file_id,
+        "media_mime_type": media_mime_type,
+        "answered": answered,
+    }
+    if telegram_message_id is not None:
+        result = await session.execute(
+            pg_insert(Message)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=[Message.chat_id, Message.telegram_message_id]
+            )
+            .returning(Message.id)
+        )
+        message_id = result.scalar_one_or_none()
+        if message_id is None:
+            message = await session.scalar(
+                select(Message).where(
+                    Message.chat_id == chat_id,
+                    Message.telegram_message_id == telegram_message_id,
+                )
+            )
+            if message is None:
+                raise RuntimeError(
+                    f"Telegram message {telegram_message_id} disappeared during deduplication"
+                )
+            return message
+        message = await session.get(Message, message_id)
+        if message is None:
+            raise RuntimeError(f"Inserted message {message_id} disappeared")
+        return message
+
+    message = Message(**values)
     session.add(message)
     await session.flush()
     return message
