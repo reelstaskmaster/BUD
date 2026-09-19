@@ -171,7 +171,7 @@ class ChatCoalescer:
             caption = text[:1024] if text else None
             await self.bot.send_photo(chat_id, photo, caption=caption)
             if len(text) > 1024:
-                await self._send_text(chat_id, text)
+                await self._send_text(chat_id, text[1024:])
             return
         await self._send_text(chat_id, text or "…")
 
