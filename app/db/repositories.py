@@ -81,7 +81,7 @@ async def list_recent_messages(
     result = await session.scalars(
         select(Message)
         .where(Message.chat_id == chat_id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
     )
     return list(reversed(result.all()))
@@ -100,7 +100,7 @@ async def list_messages_in_range(
     )
     if after is not None:
         stmt = stmt.where(Message.created_at > after)
-    stmt = stmt.order_by(Message.created_at.asc())
+    stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     result = await session.scalars(stmt)
     return list(result.all())
 
