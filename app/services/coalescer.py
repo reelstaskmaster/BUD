@@ -186,14 +186,6 @@ class ChatCoalescer:
                     continue
 
                 try:
-                    await self._send_result(chat_id, result)
-                except Exception:
-                    logger.exception("Failed to deliver reply to chat %s", chat_id)
-                    await self._send_error_reply(chat_id)
-                    failed = True
-                    break
-
-                try:
                     async with self.session_factory() as session:
                         await repo.mark_answered(session, list(batch_ids))
                         await repo.add_message(
@@ -204,13 +196,21 @@ class ChatCoalescer:
                             media_type="image_gen" if result.image_bytes else "text",
                             answered=True,
                         )
+                        delivery = await repo.create_reply_delivery(
+                            session,
+                            chat_id=chat_id,
+                            source_message_ids=list(batch_ids),
+                            content=result.text or "",
+                            media_type="image_gen" if result.image_bytes else "text",
+                            image_bytes=result.image_bytes,
+                        )
                         await session.commit()
                 except Exception:
-                    logger.exception(
-                        "Reply delivered but message state could not be persisted "
-                        "for chat %s; leaving user messages unanswered for recovery",
-                        chat_id,
-                    )
+                    logger.exception("Failed to persist reply delivery for chat %s", chat_id)
+                    failed = True
+                    break
+
+                if not await self._deliver_pending(delivery):
                     failed = True
                     break
 
