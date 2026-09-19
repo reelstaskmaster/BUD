@@ -261,6 +261,10 @@ class ChatCoalescer:
                     failed = True
                     break
 
+                if lease_lost.is_set():
+                    logger.warning("Aborting delivery for chat %s after lease loss", chat_id)
+                    failed = True
+                    break
                 if not await self._deliver_pending(delivery):
                     failed = True
                     break
