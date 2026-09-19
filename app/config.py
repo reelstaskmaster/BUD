@@ -8,8 +8,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     telegram_bot_token: str
-    openai_api_key: str
+    openai_api_key: str = ""
+    gemini_api_key: str = ""
+    openrouter_api_key: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
+
+    ai_chain: str = "gemini,openrouter,openai"
+    gemini_chat_model: str = "gemini-3.8-flash"
+    openrouter_chat_model: str = "openrouter/free"
 
     chat_model: str = "gpt-4.1"
     extract_model: str = "gpt-4.1-mini"
@@ -27,6 +33,10 @@ class Settings(BaseSettings):
     @property
     def coalesce_debounce_s(self) -> float:
         return self.coalesce_debounce_ms / 1000.0
+
+    @property
+    def ai_providers(self) -> list[str]:
+        return [item.strip().lower() for item in self.ai_chain.split(",") if item.strip()]
 
 
 @lru_cache
