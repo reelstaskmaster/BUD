@@ -51,8 +51,7 @@ class ReplyPipeline:
                     role=message.role,
                     text=_message_text_for_llm(message),
                     image_bytes=image_bytes,
-                image_mime_type=message.media_mime_type if image_bytes else None,
-                    image_mime_type=image_mime_type,
+                    image_mime_type=message.media_mime_type or image_mime_type if image_bytes else None,
                 )
             )
 
