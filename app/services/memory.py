@@ -147,7 +147,11 @@ class MemoryService:
         transcript = "\n".join(
             f"{message.role}: {message.content}" for message in recent[-6:]
         )
-        items = await self.openai.extract_facts(transcript)
+        try:
+            items = await self.openai.extract_facts(transcript)
+        except Exception:
+            logger.warning("Memory fact extraction unavailable; skipping maintenance")
+            return
         if not items:
             return
         async with self.session_factory() as session:
@@ -187,13 +191,17 @@ class MemoryService:
             if not transcript.strip():
                 return
 
-        summary_text = await self.openai.summarize(transcript)
+        try:
+            summary_text = await self.openai.summarize(transcript)
+        except Exception:
+            logger.warning("Memory summarization unavailable; skipping maintenance")
+            return
         if not summary_text:
             return
         try:
             embedding = await self.openai.embed(summary_text)
         except Exception:
-            logger.exception("Failed to embed summary")
+            logger.warning("Summary embedding unavailable; storing without vector")
             embedding = None
 
         async with self.session_factory() as session:
