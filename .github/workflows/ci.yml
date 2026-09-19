@@ -11,6 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bud"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +47,13 @@ jobs:
 
       - name: Build Docker image
         run: docker build --tag bud-ci .
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/bud
+          TELEGRAM_BOT_TOKEN: ci-placeholder
+          OPENAI_API_KEY: ci-placeholder
+        run: python -m alembic upgrade head
 
       - name: Validate Alembic metadata
         run: >-
