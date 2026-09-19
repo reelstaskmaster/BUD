@@ -55,7 +55,8 @@ async def test_openrouter_image_generation_sends_reference_image(monkeypatch) ->
 
     assert result == b"generated-image"
     assert fake_client.payload["model"] == "google/gemini-3.1-flash-image"
-    assert fake_client.payload["n"] == 1
+    assert "n" not in fake_client.payload
+    assert "resolution" not in fake_client.payload
     reference = fake_client.payload["input_references"][0]
     assert reference["type"] == "image_url"
     assert reference["image_url"]["url"] == (
