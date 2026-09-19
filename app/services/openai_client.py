@@ -207,11 +207,14 @@ class OpenAIService:
 
         last_error: Exception | None = None
         for provider in self.settings.ai_providers:
-            cooldown_until = getattr(self, "_provider_cooldowns", {}).get(provider, 0.0)
+            cooldowns = getattr(self, "_provider_cooldowns", None)
+            if cooldowns is None:
+                cooldowns = self._provider_cooldowns = {}
+            cooldown_until = cooldowns.get(provider, 0.0)
             if cooldown_until > time.monotonic():
                 logger.info("AI provider %s is cooling down", provider)
                 continue
-            self._provider_cooldowns.pop(provider, None)
+            cooldowns.pop(provider, None)
             if provider == "gemini" and self.settings.gemini_api_key:
                 try:
                     logger.info("AI provider: gemini")
