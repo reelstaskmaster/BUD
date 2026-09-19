@@ -21,9 +21,8 @@ def upgrade() -> None:
         SET delivery_key = md5(
             chat_id::text || ':' ||
             (
-                SELECT string_agg(value, ',' ORDER BY ordinality)
+                SELECT string_agg(value, ',' ORDER BY value)
                 FROM json_array_elements_text(source_message_ids)
-                WITH ORDINALITY AS items(value, ordinality)
             )
         )
         """
