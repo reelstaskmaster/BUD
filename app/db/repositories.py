@@ -321,12 +321,13 @@ async def create_reply_delivery(
 
 async def mark_reply_delivery_sent(
     session: AsyncSession, delivery_id: uuid.UUID
-) -> None:
-    await session.execute(
+) -> bool:
+    result = await session.execute(
         update(ReplyDelivery)
         .where(ReplyDelivery.id == delivery_id, ReplyDelivery.status == "pending")
         .values(status="sent", sent_at=func.now())
     )
+    return bool(result.rowcount)
 
 
 async def mark_reply_delivery_attempt(
