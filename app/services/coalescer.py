@@ -21,6 +21,7 @@ ProcessBatch = Callable[[int, list[Message]], Awaitable[ChatResult]]
 AfterReply = Callable[[int], Awaitable[None]]
 
 TYPING_INTERVAL_S = 4.0
+LEASE_RENEW_INTERVAL_S = 60.0
 ERROR_REPLY = "Не получилось ответить, попробуй ещё раз."
 TELEGRAM_TEXT_LIMIT = 4096
 
@@ -139,6 +140,10 @@ class ChatCoalescer:
                 if not batch:
                     break
                 batch_ids = {message.id for message in batch}
+                lease_task = asyncio.create_task(
+                    self._lease_heartbeat(chat_id),
+                    name=f"lease-heartbeat-{chat_id}",
+                )
                 try:
                     result = await self.process_batch(chat_id, batch)
                 except Exception:
@@ -146,6 +151,9 @@ class ChatCoalescer:
                     await self._send_error_reply(chat_id)
                     failed = True
                     break
+                finally:
+                    lease_task.cancel()
+                    await asyncio.gather(lease_task, return_exceptions=True)
 
                 async with self.session_factory() as session:
                     current = await repo.list_unanswered(session, chat_id)
@@ -215,6 +223,23 @@ class ChatCoalescer:
                     leftover = []
                 if leftover:
                     await self.notify(chat_id)
+
+    async def _lease_heartbeat(self, chat_id: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(LEASE_RENEW_INTERVAL_S)
+                async with self.session_factory() as session:
+                    renewed = await repo.renew_chat_processing(
+                        session, chat_id, self._owner
+                    )
+                    await session.commit()
+                if not renewed:
+                    logger.warning("Chat processing lease lost for chat %s", chat_id)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Chat processing lease heartbeat failed for chat %s", chat_id)
 
     async def _send_error_reply(self, chat_id: int) -> None:
         try:
