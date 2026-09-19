@@ -140,14 +140,23 @@ class OpenAIService:
         """Generate or edit an image, preferring the configured OpenRouter image API."""
         openrouter_keys = self._real_api_keys("openrouter")
         last_error: Exception | None = None
+        if not openrouter_keys:
+            return await self._generate_image_openai(prompt)
 
-        for index, api_key in self._available_key_indexes("openrouter", openrouter_keys):
+        start_index = self._next_key_index("openrouter", len(openrouter_keys))
+        candidates = [
+            ((start_index + offset) % len(openrouter_keys), openrouter_keys[(start_index + offset) % len(openrouter_keys)])
+            for offset in range(len(openrouter_keys))
+            if not self._key_is_cooling("openrouter", (start_index + offset) % len(openrouter_keys))
+        ]
+
+        for index, api_key in candidates:
             try:
+                # Keep the request to the portable core of the Images API.
+                # Optional controls vary by model endpoint and can cause 400s.
                 payload: dict[str, Any] = {
                     "model": self.settings.openrouter_image_model,
                     "prompt": prompt,
-                    "n": 1,
-                    "resolution": "1K",
                 }
                 if reference_image:
                     image_bytes, mime_type = reference_image
@@ -182,33 +191,36 @@ class OpenAIService:
                 b64 = items[0].get("b64_json")
                 if not b64:
                     raise AIProviderError("OpenRouter image generation returned no base64 image")
-                return base64.b64decode(b64)
+                try:
+                    return base64.b64decode(b64, validate=True)
+                except (ValueError, base64.binascii.Error) as exc:
+                    raise AIProviderError("OpenRouter image generation returned invalid base64") from exc
             except (httpx.RequestError, httpx.TimeoutException):
                 last_error = AIProviderError("OpenRouter image generation network error")
                 self._cool_down_key("openrouter", index, 30.0)
             except AIProviderError as exc:
                 last_error = exc
 
-        if not openrouter_keys:
-            response = await self.client.images.generate(
-                model=self.settings.image_model,
-                prompt=prompt,
-                size="1024x1024",
-                n=1,
-            )
-            item = response.data[0]
-            b64 = getattr(item, "b64_json", None)
-            if b64:
-                return base64.b64decode(b64)
-            url = getattr(item, "url", None)
-            if url:
-                async with httpx.AsyncClient(timeout=60) as http:
-                    downloaded = await http.get(url)
-                    downloaded.raise_for_status()
-                    return downloaded.content
-            raise RuntimeError("Image generation returned neither b64 nor url")
-
         raise last_error or AIProviderError("Image generation unavailable")
+
+    async def _generate_image_openai(self, prompt: str) -> bytes:
+        response = await self.client.images.generate(
+            model=self.settings.image_model,
+            prompt=prompt,
+            size="1024x1024",
+            n=1,
+        )
+        item = response.data[0]
+        b64 = getattr(item, "b64_json", None)
+        if b64:
+            return base64.b64decode(b64)
+        url = getattr(item, "url", None)
+        if url:
+            async with httpx.AsyncClient(timeout=60) as http:
+                downloaded = await http.get(url)
+                downloaded.raise_for_status()
+                return downloaded.content
+        raise RuntimeError("Image generation returned neither b64 nor url")
 
     async def summarize(self, transcript: str) -> str:
         response = await self.client.responses.create(
