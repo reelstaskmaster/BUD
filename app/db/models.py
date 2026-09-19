@@ -53,6 +53,7 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     media_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     telegram_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    media_mime_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     answered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
