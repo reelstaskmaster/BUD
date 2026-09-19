@@ -1,18 +1,25 @@
+import hashlib
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Fact, Message, Summary
+from app.db.models import Chat, Fact, Message, ReplyDelivery, Summary
 
 
 async def get_or_create_chat(session: AsyncSession, chat_id: int) -> Chat:
     chat = await session.get(Chat, chat_id)
     if chat is None:
-        chat = Chat(id=chat_id)
-        session.add(chat)
-        await session.flush()
+        await session.execute(
+            pg_insert(Chat)
+            .values(id=chat_id)
+            .on_conflict_do_nothing(index_elements=[Chat.id])
+        )
+        chat = await session.get(Chat, chat_id)
+        if chat is None:
+            raise RuntimeError(f"Failed to create chat {chat_id}")
     return chat
 
 
@@ -23,18 +30,50 @@ async def add_message(
     role: str,
     content: str,
     media_type: str | None = None,
+    telegram_message_id: int | None = None,
     telegram_file_id: str | None = None,
+    media_mime_type: str | None = None,
     answered: bool = False,
 ) -> Message:
     await get_or_create_chat(session, chat_id)
-    message = Message(
-        chat_id=chat_id,
-        role=role,
-        content=content,
-        media_type=media_type,
-        telegram_file_id=telegram_file_id,
-        answered=answered,
-    )
+    values = {
+        "chat_id": chat_id,
+        "role": role,
+        "content": content,
+        "media_type": media_type,
+        "telegram_message_id": telegram_message_id,
+        "telegram_file_id": telegram_file_id,
+        "media_mime_type": media_mime_type,
+        "answered": answered,
+    }
+    if telegram_message_id is not None:
+        result = await session.execute(
+            pg_insert(Message)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=[Message.chat_id, Message.telegram_message_id]
+            )
+            .returning(Message.id)
+        )
+        message_id = result.scalar_one_or_none()
+        if message_id is None:
+            message = await session.scalar(
+                select(Message).where(
+                    Message.chat_id == chat_id,
+                    Message.telegram_message_id == telegram_message_id,
+                )
+            )
+            if message is None:
+                raise RuntimeError(
+                    f"Telegram message {telegram_message_id} disappeared during deduplication"
+                )
+            return message
+        message = await session.get(Message, message_id)
+        if message is None:
+            raise RuntimeError(f"Inserted message {message_id} disappeared")
+        return message
+
+    message = Message(**values)
     session.add(message)
     await session.flush()
     return message
@@ -48,7 +87,7 @@ async def list_unanswered(session: AsyncSession, chat_id: int) -> list[Message]:
             Message.role == "user",
             Message.answered.is_(False),
         )
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.asc(), Message.id.asc())
     )
     return list(result.all())
 
@@ -57,7 +96,13 @@ async def mark_answered(session: AsyncSession, message_ids: list[uuid.UUID]) -> 
     if not message_ids:
         return
     await session.execute(
-        update(Message).where(Message.id.in_(message_ids)).values(answered=True)
+        update(Message)
+        .where(
+            Message.id.in_(message_ids),
+            Message.role == "user",
+            Message.answered.is_(False),
+        )
+        .values(answered=True)
     )
 
 
@@ -67,7 +112,7 @@ async def list_recent_messages(
     result = await session.scalars(
         select(Message)
         .where(Message.chat_id == chat_id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
     )
     return list(reversed(result.all()))
@@ -86,7 +131,7 @@ async def list_messages_in_range(
     )
     if after is not None:
         stmt = stmt.where(Message.created_at > after)
-    stmt = stmt.order_by(Message.created_at.asc())
+    stmt = stmt.order_by(Message.created_at.asc(), Message.id.asc())
     result = await session.scalars(stmt)
     return list(result.all())
 
@@ -206,3 +251,142 @@ async def deactivate_facts(session: AsyncSession, fact_ids: list[uuid.UUID]) -> 
         .values(active=False)
     )
     return int(result.rowcount or 0)
+
+
+async def claim_chat_processing(
+    session: AsyncSession, chat_id: int, owner: str
+) -> bool:
+    result = await session.execute(
+        update(Chat)
+        .where(
+            Chat.id == chat_id,
+            (
+                Chat.processing_until.is_(None)
+                | (Chat.processing_until < func.now())
+                | (Chat.processing_owner == owner)
+            ),
+        )
+        .values(
+            processing_owner=owner,
+            processing_until=func.now() + text("interval '15 minutes'"),
+        )
+        .returning(Chat.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def release_chat_processing(
+    session: AsyncSession, chat_id: int, owner: str
+) -> None:
+    await session.execute(
+        update(Chat)
+        .where(Chat.id == chat_id, Chat.processing_owner == owner)
+        .values(processing_owner=None, processing_until=None)
+    )
+
+
+async def renew_chat_processing(
+    session: AsyncSession, chat_id: int, owner: str
+) -> bool:
+    result = await session.execute(
+        update(Chat)
+        .where(Chat.id == chat_id, Chat.processing_owner == owner)
+        .values(processing_until=func.now() + text("interval '15 minutes'"))
+        .returning(Chat.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+    
+async def create_reply_delivery(
+    session: AsyncSession,
+    *,
+    chat_id: int,
+    source_message_ids: list[uuid.UUID],
+    content: str,
+    media_type: str,
+    image_bytes: bytes | None,
+) -> ReplyDelivery:
+    source_ids = sorted(str(item) for item in source_message_ids)
+    delivery_key = hashlib.sha256(
+        f"{chat_id}:{','.join(source_ids)}".encode()
+    ).hexdigest()
+    values = {
+        "delivery_key": delivery_key,
+        "chat_id": chat_id,
+        "source_message_ids": source_ids,
+        "content": content,
+        "media_type": media_type,
+        "image_bytes": image_bytes,
+        "status": "pending",
+        "attempts": 0,
+    }
+    result = await session.execute(
+        pg_insert(ReplyDelivery)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=[ReplyDelivery.delivery_key])
+        .returning(ReplyDelivery.id)
+    )
+    delivery_id = result.scalar_one_or_none()
+    if delivery_id is None:
+        delivery = await session.scalar(
+            select(ReplyDelivery).where(ReplyDelivery.delivery_key == delivery_key)
+        )
+        if delivery is None:
+            raise RuntimeError("Reply delivery disappeared after conflict")
+        return delivery
+    delivery = await session.get(ReplyDelivery, delivery_id)
+    if delivery is None:
+        raise RuntimeError("Created reply delivery could not be loaded")
+    return delivery
+
+async def mark_reply_delivery_sent(
+    session: AsyncSession, delivery_id: uuid.UUID
+) -> bool:
+    result = await session.execute(
+        update(ReplyDelivery)
+        .where(ReplyDelivery.id == delivery_id, ReplyDelivery.status == "pending")
+        .values(status="sent", sent_at=func.now())
+    )
+    return bool(result.rowcount)
+
+
+async def mark_reply_delivery_attempt(
+    session: AsyncSession, delivery_id: uuid.UUID, error: str
+) -> None:
+    await session.execute(
+        update(ReplyDelivery)
+        .where(ReplyDelivery.id == delivery_id, ReplyDelivery.status == "pending")
+        .values(
+            attempts=ReplyDelivery.attempts + 1,
+            last_error=error[:2000],
+            next_attempt_at=func.now() + text("interval '30 seconds'"),
+        )
+    )
+
+
+async def list_pending_reply_deliveries(
+    session: AsyncSession, chat_id: int, limit: int = 5
+) -> list[ReplyDelivery]:
+    result = await session.scalars(
+        select(ReplyDelivery)
+        .where(
+            ReplyDelivery.chat_id == chat_id,
+            ReplyDelivery.status == "pending",
+            ReplyDelivery.next_attempt_at <= func.now(),
+        )
+        .order_by(ReplyDelivery.created_at.asc())
+        .limit(limit)
+    )
+    return list(result.all())
+
+
+async def list_pending_reply_chat_ids(
+    session: AsyncSession, limit: int = 1000
+) -> list[int]:
+    result = await session.scalars(
+        select(ReplyDelivery.chat_id)
+        .where(ReplyDelivery.status == "pending")
+        .distinct()
+        .limit(limit)
+    )
+    return list(result.all())

@@ -72,12 +72,17 @@ class MemoryService:
         if not content.strip():
             return "Nothing to remember."
         category = category if category in FACT_CATEGORIES else "other"
-        embedding = await self.openai.embed(content)
-        duplicates = await repo.similar_facts(
-            session, chat_id, embedding, limit=1, active_only=True
-        )
-        if duplicates and duplicates[0][1] <= NEAR_DUPLICATE_DISTANCE:
-            return "That fact is already in memory."
+        try:
+            embedding = await self.openai.embed(content)
+        except Exception:
+            logger.warning("Embedding unavailable; storing fact without vector")
+            embedding = None
+        if embedding is not None:
+            duplicates = await repo.similar_facts(
+                session, chat_id, embedding, limit=1, active_only=True
+            )
+            if duplicates and duplicates[0][1] <= NEAR_DUPLICATE_DISTANCE:
+                return "That fact is already in memory."
         await repo.add_fact(
             session,
             chat_id=chat_id,
@@ -89,11 +94,23 @@ class MemoryService:
         return "Fact stored."
 
     async def forget_fact(self, session: AsyncSession, chat_id: int, query: str) -> str:
-        embedding = await self.openai.embed(query)
-        matches = await repo.similar_facts(
-            session, chat_id, embedding, limit=8, active_only=True
-        )
-        to_drop = [fact.id for fact, dist in matches if dist <= FORGET_DISTANCE]
+        if not query.strip():
+            return "Nothing to forget."
+        try:
+            embedding = await self.openai.embed(query)
+        except Exception:
+            logger.warning("Embedding unavailable; using exact fact text matching")
+            embedding = None
+
+        if embedding is not None:
+            matches = await repo.similar_facts(
+                session, chat_id, embedding, limit=8, active_only=True
+            )
+            to_drop = [fact.id for fact, dist in matches if dist <= FORGET_DISTANCE]
+        else:
+            facts = await repo.list_active_facts(session, chat_id)
+            needle = query.strip().casefold()
+            to_drop = [fact.id for fact in facts if needle in fact.content.casefold()]
         forgotten = await repo.deactivate_facts(session, to_drop)
         await session.commit()
         if forgotten:
@@ -117,11 +134,8 @@ class MemoryService:
         return f"Unknown tool: {name}"
 
     async def maintain(self, chat_id: int) -> None:
-        try:
-            await self._extract_from_recent_turn(chat_id)
-            await self._summarize_if_needed(chat_id)
-        except Exception:
-            logger.exception("Memory maintenance failed for chat %s", chat_id)
+        await self._extract_from_recent_turn(chat_id)
+        await self._summarize_if_needed(chat_id)
 
     async def _extract_from_recent_turn(self, chat_id: int) -> None:
         async with self.session_factory() as session:
@@ -133,11 +147,17 @@ class MemoryService:
         transcript = "\n".join(
             f"{message.role}: {message.content}" for message in recent[-6:]
         )
-        items = await self.openai.extract_facts(transcript)
+        try:
+            items = await self.openai.extract_facts(transcript)
+        except Exception:
+            logger.warning("Memory fact extraction unavailable; skipping maintenance")
+            return
         if not items:
             return
         async with self.session_factory() as session:
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 content = str(item.get("content") or "").strip()
                 if not content:
                     continue
@@ -171,13 +191,17 @@ class MemoryService:
             if not transcript.strip():
                 return
 
-        summary_text = await self.openai.summarize(transcript)
+        try:
+            summary_text = await self.openai.summarize(transcript)
+        except Exception:
+            logger.warning("Memory summarization unavailable; skipping maintenance")
+            return
         if not summary_text:
             return
         try:
             embedding = await self.openai.embed(summary_text)
         except Exception:
-            logger.exception("Failed to embed summary")
+            logger.warning("Summary embedding unavailable; storing without vector")
             embedding = None
 
         async with self.session_factory() as session:
