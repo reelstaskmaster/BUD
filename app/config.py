@@ -14,8 +14,11 @@ class Settings(BaseSettings):
     webhook_secret: str = ""
     port: int = Field(default=8080, ge=1, le=65535)
     openai_api_key: str = ""
+    openai_api_keys: str = ""
     gemini_api_key: str = ""
+    gemini_api_keys: str = ""
     openrouter_api_key: str = ""
+    openrouter_api_keys: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
     ai_chain: str = "gemini,openrouter,openai"
@@ -38,6 +41,22 @@ class Settings(BaseSettings):
     @property
     def coalesce_debounce_s(self) -> float:
         return self.coalesce_debounce_ms / 1000.0
+
+    @staticmethod
+    def _split_api_keys(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @property
+    def openai_api_key_pool(self) -> list[str]:
+        return self._split_api_keys(self.openai_api_keys or self.openai_api_key)
+
+    @property
+    def gemini_api_key_pool(self) -> list[str]:
+        return self._split_api_keys(self.gemini_api_keys or self.gemini_api_key)
+
+    @property
+    def openrouter_api_key_pool(self) -> list[str]:
+        return self._split_api_keys(self.openrouter_api_keys or self.openrouter_api_key)
 
     @property
     def ai_providers(self) -> list[str]:
