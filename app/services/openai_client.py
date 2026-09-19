@@ -207,7 +207,7 @@ class OpenAIService:
 
         last_error: Exception | None = None
         for provider in self.settings.ai_providers:
-            cooldown_until = self._provider_cooldowns.get(provider, 0.0)
+            cooldown_until = getattr(self, "_provider_cooldowns", {}).get(provider, 0.0)
             if cooldown_until > time.monotonic():
                 logger.info("AI provider %s is cooling down", provider)
                 continue
