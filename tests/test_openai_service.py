@@ -257,3 +257,34 @@ async def test_provider_network_error_is_fallbackable() -> None:
 
     result = await service.chat(instructions="i", messages=[], tool_handler=handler)
     assert result.text == "router ok"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_provider_is_cooled_down() -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "ai_providers": ["gemini", "openrouter"],
+            "gemini_api_key": "gemini-key",
+            "openai_api_key": "",
+        },
+    )()
+    service.openrouter = object()
+    service._provider_cooldowns = {"gemini": 10**12}
+
+    async def gemini(_instructions, _messages, _handler):
+        raise AssertionError("cooled provider must not be called")
+
+    async def openrouter(_instructions, _messages, _handler):
+        return type("Result", (), {"text": "router ok"})()
+
+    service._chat_gemini = gemini
+    service._chat_openrouter = openrouter
+
+    async def handler(_name, _args):
+        return "ok"
+
+    result = await service.chat(instructions="i", messages=[], tool_handler=handler)
+    assert result.text == "router ok"
