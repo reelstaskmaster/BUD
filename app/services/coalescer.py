@@ -322,6 +322,7 @@ class ChatCoalescer:
             raise
         except Exception:
             logger.exception("Chat processing lease heartbeat failed for chat %s", chat_id)
+            lease_lost.set()
 
     async def _recover_delivery_loop(self, chat_id: int) -> None:
         async with self.session_factory() as session:
