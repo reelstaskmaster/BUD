@@ -287,7 +287,13 @@ class OpenAIService:
         if pool:
             return list(pool)
         key = getattr(self.settings, singular_attr, "")
-        return [key] if key else []
+        if key:
+            return [key]
+        # Preserve lightweight test doubles/legacy callers that expose only
+        # an already-created OpenRouter client.
+        if provider == "openrouter" and getattr(self, "openrouter", None):
+            return ["__configured_client__"]
+        return []
 
     def _next_key_index(self, provider: str, count: int) -> int:
         if count <= 1:
