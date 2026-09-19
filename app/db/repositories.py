@@ -359,6 +359,7 @@ async def mark_reply_delivery_attempt(
         .values(
             attempts=ReplyDelivery.attempts + 1,
             last_error=error[:2000],
+            next_attempt_at=func.now() + text("interval '30 seconds'"),
         )
     )
 
