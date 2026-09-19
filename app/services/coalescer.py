@@ -117,18 +117,34 @@ class ChatCoalescer:
                 if extra_ids:
                     continue
 
-                await self._send_result(chat_id, result)
-                async with self.session_factory() as session:
-                    await repo.mark_answered(session, list(batch_ids))
-                    await repo.add_message(
-                        session,
-                        chat_id=chat_id,
-                        role="assistant",
-                        content=result.text or "",
-                        media_type="image_gen" if result.image_bytes else "text",
-                        answered=True,
+                try:
+                    await self._send_result(chat_id, result)
+                except Exception:
+                    logger.exception("Failed to deliver reply to chat %s", chat_id)
+                    failed = True
+                    break
+
+                try:
+                    async with self.session_factory() as session:
+                        await repo.mark_answered(session, list(batch_ids))
+                        await repo.add_message(
+                            session,
+                            chat_id=chat_id,
+                            role="assistant",
+                            content=result.text or "",
+                            media_type="image_gen" if result.image_bytes else "text",
+                            answered=True,
+                        )
+                        await session.commit()
+                except Exception:
+                    logger.exception(
+                        "Reply delivered but message state could not be persisted "
+                        "for chat %s; leaving user messages unanswered for recovery",
+                        chat_id,
                     )
-                    await session.commit()
+                    failed = True
+                    break
+
                 if self.after_reply:
                     asyncio.create_task(self.after_reply(chat_id))
                 break
@@ -137,8 +153,14 @@ class ChatCoalescer:
                 state.busy = False
                 self._stop_typing(state)
             if not failed:
-                async with self.session_factory() as session:
-                    leftover = await repo.list_unanswered(session, chat_id)
+                try:
+                    async with self.session_factory() as session:
+                        leftover = await repo.list_unanswered(session, chat_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to inspect leftover messages for chat %s", chat_id
+                    )
+                    leftover = []
                 if leftover:
                     await self.notify(chat_id)
 
