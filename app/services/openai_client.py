@@ -63,8 +63,11 @@ CHAT_TOOLS: list[dict[str, Any]] = [
         "description": "Generate an image from a text prompt and send it to the user. Call this when the user asks to draw, generate, or create a picture.",
         "parameters": {
             "type": "object",
-            "properties": {"prompt": {"type": "string", "description": "Detailed image generation prompt."}},
-            "required": ["prompt"],
+            "properties": {
+                "prompt": {"type": "string", "description": "Detailed image generation or editing prompt."},
+                "use_reference": {"type": "boolean", "description": "True when the user wants to edit or transform an image they provided in this conversation."},
+            },
+            "required": ["prompt", "use_reference"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -128,24 +131,84 @@ class OpenAIService:
             raise
         return list(response.data[0].embedding)
 
-    async def generate_image(self, prompt: str) -> bytes:
-        response = await self.client.images.generate(
-            model=self.settings.image_model,
-            prompt=prompt,
-            size="1024x1024",
-            n=1,
-        )
-        item = response.data[0]
-        b64 = getattr(item, "b64_json", None)
-        if b64:
-            return base64.b64decode(b64)
-        url = getattr(item, "url", None)
-        if url:
-            async with httpx.AsyncClient(timeout=60) as http:
-                downloaded = await http.get(url)
-                downloaded.raise_for_status()
-                return downloaded.content
-        raise RuntimeError("Image generation returned neither b64 nor url")
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        reference_image: tuple[bytes, str] | None = None,
+    ) -> bytes:
+        """Generate or edit an image, preferring the configured OpenRouter image API."""
+        openrouter_keys = self._real_api_keys("openrouter")
+        last_error: Exception | None = None
+
+        for index, api_key in self._available_key_indexes("openrouter", openrouter_keys):
+            try:
+                payload: dict[str, Any] = {
+                    "model": self.settings.openrouter_image_model,
+                    "prompt": prompt,
+                    "n": 1,
+                    "resolution": "1K",
+                }
+                if reference_image:
+                    image_bytes, mime_type = reference_image
+                    encoded = base64.b64encode(image_bytes).decode("ascii")
+                    payload["input_references"] = [{
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                    }]
+
+                async with httpx.AsyncClient(timeout=120) as http:
+                    response = await http.post(
+                        "https://openrouter.ai/api/v1/images",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                if response.status_code >= 400:
+                    if response.status_code in {401, 402, 403, 408, 429, 500, 502, 503, 504, 524, 529}:
+                        self._cool_down_key("openrouter", index, 60.0)
+                        last_error = AIProviderError(
+                            f"OpenRouter image generation unavailable ({response.status_code})"
+                        )
+                        continue
+                    response.raise_for_status()
+
+                data = response.json()
+                items = data.get("data") or []
+                if not items:
+                    raise AIProviderError("OpenRouter image generation returned no image data")
+                b64 = items[0].get("b64_json")
+                if not b64:
+                    raise AIProviderError("OpenRouter image generation returned no base64 image")
+                return base64.b64decode(b64)
+            except (httpx.RequestError, httpx.TimeoutException):
+                last_error = AIProviderError("OpenRouter image generation network error")
+                self._cool_down_key("openrouter", index, 30.0)
+            except AIProviderError as exc:
+                last_error = exc
+
+        if not openrouter_keys:
+            response = await self.client.images.generate(
+                model=self.settings.image_model,
+                prompt=prompt,
+                size="1024x1024",
+                n=1,
+            )
+            item = response.data[0]
+            b64 = getattr(item, "b64_json", None)
+            if b64:
+                return base64.b64decode(b64)
+            url = getattr(item, "url", None)
+            if url:
+                async with httpx.AsyncClient(timeout=60) as http:
+                    downloaded = await http.get(url)
+                    downloaded.raise_for_status()
+                    return downloaded.content
+            raise RuntimeError("Image generation returned neither b64 nor url")
+
+        raise last_error or AIProviderError("Image generation unavailable")
 
     async def summarize(self, transcript: str) -> str:
         response = await self.client.responses.create(
@@ -280,6 +343,28 @@ class OpenAIService:
             raise last_error
         raise AIProviderError("No AI provider is configured")
 
+    def _real_api_keys(self, provider: str) -> list[str]:
+        pool_attr = f"{provider}_api_key_pool"
+        singular_attr = f"{provider}_api_key"
+        pool = getattr(self.settings, pool_attr, None)
+        if pool:
+            return list(pool)
+        key = getattr(self.settings, singular_attr, "")
+        return [key] if key else []
+
+    def _available_key_indexes(
+        self,
+        provider: str,
+        keys: list[str],
+    ) -> list[tuple[int, str]]:
+        now = time.monotonic()
+        cooldowns = getattr(self, "_key_cooldowns", None) or {}
+        return [
+            (index, key)
+            for index, key in enumerate(keys)
+            if cooldowns.get((provider, index), 0.0) <= now
+        ]
+
     def _configured_keys(self, provider: str) -> list[str]:
         pool_attr = f"{provider}_api_key_pool"
         singular_attr = f"{provider}_api_key"
@@ -362,8 +447,16 @@ class OpenAIService:
             if not calls:
                 return ChatResult((response.output_text or "").strip(), image_bytes, "image/png" if image_bytes else None, image_prompt)
             outputs: list[dict[str, Any]] = []
+            reference_image = _latest_reference_image(messages)
             for call in calls:
-                tool_output, image_bytes, image_prompt = await self._run_tool(call.name, call.arguments, tool_handler, image_bytes, image_prompt)
+                tool_output, image_bytes, image_prompt = await self._run_tool(
+                    call.name,
+                    call.arguments,
+                    tool_handler,
+                    image_bytes,
+                    image_prompt,
+                    reference_image=reference_image,
+                )
                 outputs.append({"type": "function_call_output", "call_id": call.call_id, "output": tool_output})
             current_input = outputs
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
@@ -395,8 +488,16 @@ class OpenAIService:
             if not choice.tool_calls:
                 return ChatResult((choice.content or "").strip(), image_bytes, "image/png" if image_bytes else None, image_prompt)
             history.append(choice.model_dump(exclude_none=True))
+            reference_image = _latest_reference_image(messages)
             for call in choice.tool_calls:
-                tool_output, image_bytes, image_prompt = await self._run_tool(call.function.name, call.function.arguments, tool_handler, image_bytes, image_prompt)
+                tool_output, image_bytes, image_prompt = await self._run_tool(
+                    call.function.name,
+                    call.function.arguments,
+                    tool_handler,
+                    image_bytes,
+                    image_prompt,
+                    reference_image=reference_image,
+                )
                 history.append({"role": "tool", "tool_call_id": call.id, "content": tool_output})
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
@@ -431,9 +532,17 @@ class OpenAIService:
                     text = "".join(part.get("text", "") for part in parts).strip()
                     return ChatResult(text, image_bytes, "image/png" if image_bytes else None, image_prompt)
                 contents.append(content)
+                reference_image = _latest_reference_image(messages)
                 for call in calls:
                     args = call.get("args") or {}
-                    tool_output, image_bytes, image_prompt = await self._run_tool(call.get("name", ""), json.dumps(args), tool_handler, image_bytes, image_prompt)
+                    tool_output, image_bytes, image_prompt = await self._run_tool(
+                        call.get("name", ""),
+                        json.dumps(args),
+                        tool_handler,
+                        image_bytes,
+                        image_prompt,
+                        reference_image=reference_image,
+                    )
                     contents.append({"role": "user", "parts": [{"functionResponse": {"name": call.get("name", ""), "id": call.get("id"), "response": {"result": tool_output}}}]})
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
@@ -444,6 +553,8 @@ class OpenAIService:
         tool_handler: ToolHandler,
         image_bytes: bytes | None,
         image_prompt: str | None,
+        *,
+        reference_image: tuple[bytes, str] | None = None,
     ) -> tuple[str, bytes | None, str | None]:
         try:
             args = json.loads(raw_arguments or "{}")
@@ -454,13 +565,26 @@ class OpenAIService:
             prompt = str(args.get("prompt") or "").strip()
             if not prompt:
                 return "Image generation requires a non-empty prompt.", image_bytes, image_prompt
+            use_reference = bool(args.get("use_reference", False))
             try:
-                image_bytes = await self.generate_image(prompt)
+                image_bytes = await self.generate_image(
+                    prompt,
+                    reference_image=reference_image if use_reference else None,
+                )
                 return "Image generated and will be sent to the user.", image_bytes, prompt
             except Exception:
                 logger.exception("Image generation failed")
                 return "Image generation failed. Tell the user it did not work.", image_bytes, image_prompt
         return await tool_handler(name, args), image_bytes, image_prompt
+
+
+def _latest_reference_image(
+    messages: list[OpenAIInputMessage],
+) -> tuple[bytes, str] | None:
+    for message in reversed(messages):
+        if message.role == "user" and message.image_bytes:
+            return message.image_bytes, message.image_mime_type or "image/jpeg"
+    return None
 
 
 def _provider_error(provider: str, exc: Exception) -> AIProviderError:
