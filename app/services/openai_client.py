@@ -15,6 +15,8 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
 ToolHandler = Callable[[str, dict[str, Any]], Awaitable[str]]
 
 CHAT_TOOLS: list[dict[str, Any]] = [
@@ -295,6 +297,9 @@ def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
     if message.role == "assistant":
         return {"role": "assistant", "content": message.text or ""}
     if message.image_bytes:
+        mime_type = message.image_mime_type or "image/jpeg"
+        if mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
+            raise ValueError(f"Unsupported image MIME type: {mime_type}")
         b64 = base64.b64encode(message.image_bytes).decode("ascii")
         text = message.text or "Please look at this image."
         return {
@@ -303,7 +308,7 @@ def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
                 {"type": "input_text", "text": text},
                 {
                     "type": "input_image",
-                    "image_url": f"data:{message.image_mime_type or 'image/jpeg'};base64,{b64}",
+                    "image_url": f"data:{mime_type};base64,{b64}",
                 },
             ],
         }
