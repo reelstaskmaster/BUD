@@ -257,18 +257,22 @@ class OpenAIService:
             for call in calls:
                 name = call.name
                 try:
-                    args = json.loads(call.arguments or "{}")
+                    parsed_args = json.loads(call.arguments or "{}")
                 except json.JSONDecodeError:
-                    args = {}
+                    parsed_args = {}
+                args = parsed_args if isinstance(parsed_args, dict) else {}
                 if name == "generate_image":
-                    prompt = str(args.get("prompt") or "")
-                    try:
-                        image_bytes = await self.generate_image(prompt)
-                        image_prompt = prompt
-                        tool_output = "Image generated and will be sent to the user."
-                    except Exception:
-                        logger.exception("Image generation failed")
-                        tool_output = "Image generation failed. Tell the user it did not work."
+                    prompt = str(args.get("prompt") or "").strip()
+                    if not prompt:
+                        tool_output = "Image generation requires a non-empty prompt."
+                    else:
+                        try:
+                            image_bytes = await self.generate_image(prompt)
+                            image_prompt = prompt
+                            tool_output = "Image generated and will be sent to the user."
+                        except Exception:
+                            logger.exception("Image generation failed")
+                            tool_output = "Image generation failed. Tell the user it did not work."
                 else:
                     tool_output = await tool_handler(name, args)
                 outputs.append(
