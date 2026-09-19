@@ -72,12 +72,17 @@ class MemoryService:
         if not content.strip():
             return "Nothing to remember."
         category = category if category in FACT_CATEGORIES else "other"
-        embedding = await self.openai.embed(content)
-        duplicates = await repo.similar_facts(
-            session, chat_id, embedding, limit=1, active_only=True
-        )
-        if duplicates and duplicates[0][1] <= NEAR_DUPLICATE_DISTANCE:
-            return "That fact is already in memory."
+        try:
+            embedding = await self.openai.embed(content)
+        except Exception:
+            logger.warning("Embedding unavailable; storing fact without vector")
+            embedding = None
+        if embedding is not None:
+            duplicates = await repo.similar_facts(
+                session, chat_id, embedding, limit=1, active_only=True
+            )
+            if duplicates and duplicates[0][1] <= NEAR_DUPLICATE_DISTANCE:
+                return "That fact is already in memory."
         await repo.add_fact(
             session,
             chat_id=chat_id,
@@ -91,11 +96,21 @@ class MemoryService:
     async def forget_fact(self, session: AsyncSession, chat_id: int, query: str) -> str:
         if not query.strip():
             return "Nothing to forget."
-        embedding = await self.openai.embed(query)
-        matches = await repo.similar_facts(
-            session, chat_id, embedding, limit=8, active_only=True
-        )
-        to_drop = [fact.id for fact, dist in matches if dist <= FORGET_DISTANCE]
+        try:
+            embedding = await self.openai.embed(query)
+        except Exception:
+            logger.warning("Embedding unavailable; using exact fact text matching")
+            embedding = None
+
+        if embedding is not None:
+            matches = await repo.similar_facts(
+                session, chat_id, embedding, limit=8, active_only=True
+            )
+            to_drop = [fact.id for fact, dist in matches if dist <= FORGET_DISTANCE]
+        else:
+            facts = await repo.list_active_facts(session, chat_id)
+            needle = query.strip().casefold()
+            to_drop = [fact.id for fact in facts if needle in fact.content.casefold()]
         forgotten = await repo.deactivate_facts(session, to_drop)
         await session.commit()
         if forgotten:
