@@ -49,6 +49,7 @@ def build_router(
                 role="user",
                 content=text,
                 media_type="text",
+                telegram_message_id=message.message_id,
             )
             await session.commit()
         await coalescer.notify(message.chat.id)
@@ -81,6 +82,7 @@ def build_router(
                 role="user",
                 content=caption,
                 media_type="photo",
+                telegram_message_id=message.message_id,
                 telegram_file_id=photo.file_id,
                 media_mime_type="image/jpeg",
             )
@@ -115,6 +117,7 @@ def build_router(
                 role="user",
                 content=caption,
                 media_type="photo",
+                telegram_message_id=message.message_id,
                 telegram_file_id=document.file_id,
                 media_mime_type=mime,
             )
@@ -155,6 +158,7 @@ async def _ingest_audio(
             role="user",
             content=content,
             media_type="voice",
+            telegram_message_id=message.message_id,
         )
         await session.commit()
     await coalescer.notify(message.chat.id)
