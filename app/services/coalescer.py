@@ -182,11 +182,7 @@ class ChatCoalescer:
                 pending = await repo.list_pending_reply_deliveries(session, chat_id, limit=10)
             if pending:
                 for delivery in pending:
-                    if lease_lost.is_set():
-                    logger.warning("Aborting delivery for chat %s after lease loss", chat_id)
-                    failed = True
-                    break
-                if not await self._deliver_pending(delivery):
+                    if not await self._deliver_pending(delivery):
                         failed = True
                         return
             while True:
