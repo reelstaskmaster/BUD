@@ -179,19 +179,19 @@ async def test_lease_heartbeat_sets_loss_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delivery_retry_worker_survives_transient_error() -> None:
+async def test_delivery_retry_worker_survives_transient_error(monkeypatch) -> None:
     bot = FakeBot()
     coalescer = make_coalescer(bot)
     calls = 0
 
     original = repo.list_pending_reply_chat_ids
+    monkeypatch.setattr("app.services.coalescer.DELIVERY_RETRY_INTERVAL_S", 0)
 
     async def flaky(session, limit=1000):
         nonlocal calls
         calls += 1
         if calls == 1:
             raise RuntimeError("temporary db failure")
-        coalescer._retry_task.cancel()
         return []
 
     repo.list_pending_reply_chat_ids = flaky
@@ -199,8 +199,9 @@ async def test_delivery_retry_worker_survives_transient_error() -> None:
         task = asyncio.create_task(coalescer._delivery_retry_loop())
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        assert calls == 1
+        assert calls >= 2
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     finally:
         repo.list_pending_reply_chat_ids = original
+
