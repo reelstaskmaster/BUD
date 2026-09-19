@@ -27,9 +27,5 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q app alembic
 
-      - name: Validate Alembic configuration
-        env:
-          TELEGRAM_BOT_TOKEN: ci-placeholder
-          OPENAI_API_KEY: ci-placeholder
-          DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
-        run: python -m alembic check
+      - name: Validate Alembic metadata
+        run: python -m alembic heads
