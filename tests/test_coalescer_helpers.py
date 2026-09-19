@@ -37,7 +37,7 @@ async def test_send_text_splits_at_telegram_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_text_sends_one_message_for_empty_text() -> None:
+async def test_send_text_skips_empty_text() -> None:
     bot = FakeBot()
     coalescer = make_coalescer(bot)
 
