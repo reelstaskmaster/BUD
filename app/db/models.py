@@ -10,6 +10,9 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    LargeBinary,
+    Integer,
+    JSON,
     Uuid,
     func,
     text,
@@ -67,6 +70,30 @@ class Message(Base):
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
 
+
+class ReplyDelivery(Base):
+    __tablename__ = "reply_deliveries"
+    __table_args__ = (
+        Index("ix_reply_deliveries_chat_status", "chat_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    media_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
+    image_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    source_message_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 class Summary(Base):
     __tablename__ = "summaries"
