@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.services.coalescer import ChatCoalescer, ChatResult, TELEGRAM_TEXT_LIMIT
@@ -80,3 +82,24 @@ async def test_send_result_image_caption_is_not_duplicated_after_1024() -> None:
 
     assert bot.photos[0][2] == text
     assert bot.messages == []
+
+
+@pytest.mark.asyncio
+async def test_after_reply_failure_is_observed_and_does_not_escape() -> None:
+    bot = FakeBot()
+    failures = []
+
+    async def after_reply(chat_id):
+        raise RuntimeError("maintenance failed")
+
+    coalescer = ChatCoalescer(
+        bot=bot,
+        session_factory=None,
+        process_batch=None,
+        debounce_s=0,
+        after_reply=after_reply,
+    )
+    # Exercise the callback itself: asyncio's done callback consumes task.result().
+    task = asyncio.create_task(after_reply(123))
+    coalescer._log_background_failure(task)
+    assert task.done()
