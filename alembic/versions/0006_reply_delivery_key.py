@@ -14,12 +14,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
     op.add_column("reply_deliveries", sa.Column("delivery_key", sa.String(length=64), nullable=True))
     op.execute(
         """
         UPDATE reply_deliveries
-        SET delivery_key = md5(
-            chat_id::text || ':' ||
+        SET delivery_key = encode(
+            digest(
+                chat_id::text || ':' ||
             (
                 SELECT string_agg(value, ',' ORDER BY value)
                 FROM json_array_elements_text(source_message_ids)
