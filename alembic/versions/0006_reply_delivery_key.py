@@ -22,13 +22,16 @@ def upgrade() -> None:
         SET delivery_key = encode(
             digest(
                 chat_id::text || ':' ||
-            (
-                SELECT string_agg(value, ',' ORDER BY value)
-                FROM json_array_elements_text(source_message_ids)
-            )
+                (
+                    SELECT string_agg(value, ',' ORDER BY value)
+                    FROM json_array_elements_text(source_message_ids)
+                ),
+                'sha256'
+            ),
+            'hex'
         )
         """
-    )
+    )    )
     op.alter_column("reply_deliveries", "delivery_key", nullable=False)
     op.create_index(
         "uq_reply_deliveries_key",
