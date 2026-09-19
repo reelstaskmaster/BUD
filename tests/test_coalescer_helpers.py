@@ -138,8 +138,9 @@ def test_chat_coalescer_has_unique_process_owner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lease_heartbeat_sets_loss_event() -> None:
+async def test_lease_heartbeat_sets_loss_event(monkeypatch) -> None:
     bot = FakeBot()
+    monkeypatch.setattr("app.services.coalescer.LEASE_RENEW_INTERVAL_S", 0)
 
     class SessionContext:
         async def __aenter__(self):
@@ -171,6 +172,7 @@ async def test_lease_heartbeat_sets_loss_event() -> None:
         event = asyncio.Event()
         task = asyncio.create_task(coalescer._lease_heartbeat(123, event))
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
         assert event.is_set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -181,8 +183,25 @@ async def test_lease_heartbeat_sets_loss_event() -> None:
 @pytest.mark.asyncio
 async def test_delivery_retry_worker_survives_transient_error(monkeypatch) -> None:
     bot = FakeBot()
-    coalescer = make_coalescer(bot)
     calls = 0
+
+    class SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class SessionFactory:
+        def __call__(self):
+            return SessionContext()
+
+    coalescer = ChatCoalescer(
+        bot=bot,
+        session_factory=SessionFactory(),  # type: ignore[arg-type]
+        process_batch=None,  # type: ignore[arg-type]
+        debounce_s=0,
+    )
 
     original = repo.list_pending_reply_chat_ids
     monkeypatch.setattr("app.services.coalescer.DELIVERY_RETRY_INTERVAL_S", 0)
@@ -197,6 +216,7 @@ async def test_delivery_retry_worker_survives_transient_error(monkeypatch) -> No
     repo.list_pending_reply_chat_ids = flaky
     try:
         task = asyncio.create_task(coalescer._delivery_retry_loop())
+        await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert calls >= 2
