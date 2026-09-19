@@ -134,6 +134,8 @@ class ChatCoalescer:
                     else:
                         batch = []
                     await session.commit()
+                if not claimed:
+                    return
                 if not batch:
                     break
                 batch_ids = {message.id for message in batch}
