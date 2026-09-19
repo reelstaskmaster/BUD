@@ -25,3 +25,9 @@ async def test_unknown_tool_is_reported(service: MemoryService) -> None:
 async def test_empty_remember_is_rejected_without_embedding(service: MemoryService) -> None:
     result = await service.remember_fact(None, 1, "   ", "person")  # type: ignore[arg-type]
     assert result == "Nothing to remember."
+
+
+@pytest.mark.asyncio
+async def test_empty_forget_is_rejected_without_embedding(service: MemoryService) -> None:
+    result = await service.forget_fact(None, 1, "   ")  # type: ignore[arg-type]
+    assert result == "Nothing to forget."
