@@ -107,12 +107,12 @@ async def test_openrouter_image_generation_rejects_invalid_base64(monkeypatch) -
         "app.services.openai_client.httpx.AsyncClient",
         lambda **_kwargs: fake_client,
     )
-    fake_client.post = BadBase64Post().__call__
+    fake_client.post = AsyncBadBase64Post().__call__
 
     with pytest.raises(Exception, match="invalid base64"):
         await service.generate_image("test")
 
 
-class BadBase64Post:
-    def __call__(self, _url, *, headers, json):
+class AsyncBadBase64Post:
+    async def __call__(self, _url, *, headers, json):
         return BadBase64Response()
