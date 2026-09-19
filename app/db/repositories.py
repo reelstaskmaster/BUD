@@ -24,6 +24,7 @@ async def add_message(
     content: str,
     media_type: str | None = None,
     telegram_file_id: str | None = None,
+    media_mime_type: str | None = None,
     answered: bool = False,
 ) -> Message:
     await get_or_create_chat(session, chat_id)
@@ -33,6 +34,7 @@ async def add_message(
         content=content,
         media_type=media_type,
         telegram_file_id=telegram_file_id,
+        media_mime_type=media_mime_type,
         answered=answered,
     )
     session.add(message)
