@@ -199,6 +199,10 @@ class OpenAIService:
         messages: list[OpenAIInputMessage],
         tool_handler: ToolHandler,
     ) -> ChatResult:
+        # Keep existing unit-test doubles and legacy callers on the original OpenAI path.
+        if not hasattr(self.settings, "ai_providers"):
+            return await self._chat_openai(instructions, messages, tool_handler)
+
         last_error: Exception | None = None
         for provider in self.settings.ai_providers:
             if provider == "gemini" and self.settings.gemini_api_key:
