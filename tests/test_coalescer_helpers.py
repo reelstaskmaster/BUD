@@ -262,3 +262,31 @@ async def test_delivery_retry_worker_survives_transient_error(monkeypatch) -> No
     finally:
         repo.list_pending_reply_chat_ids = original
 
+
+
+@pytest.mark.asyncio
+async def test_send_text_retries_telegram_flood_wait() -> None:
+    from aiogram.exceptions import TelegramRetryAfter
+    from aiogram.methods import SendMessage
+
+    class FloodBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def send_message(self, chat_id: int, text: str) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise TelegramRetryAfter(
+                    method=SendMessage(chat_id=chat_id, text=text),
+                    message="flood",
+                    retry_after=0,
+                )
+            await super().send_message(chat_id, text)
+
+    bot = FloodBot()
+    coalescer = make_coalescer(bot)
+    await coalescer._send_text(123, "hello")
+
+    assert bot.calls == 2
+    assert bot.messages == [(123, "hello")]
