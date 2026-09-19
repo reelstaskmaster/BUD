@@ -196,6 +196,10 @@ class OpenAIService:
                     return base64.b64decode(b64, validate=True)
                 except (ValueError, binascii.Error) as exc:
                     raise AIProviderError("OpenRouter image generation returned invalid base64") from exc
+            except httpx.HTTPStatusError as exc:
+                last_error = AIProviderError(
+                    f"OpenRouter image generation failed ({exc.response.status_code})"
+                )
             except (httpx.RequestError, httpx.TimeoutException):
                 last_error = AIProviderError("OpenRouter image generation network error")
                 self._cool_down_key("openrouter", index, 30.0)
