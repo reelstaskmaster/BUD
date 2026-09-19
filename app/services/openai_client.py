@@ -20,6 +20,9 @@ class OpenAIQuotaError(RuntimeError):
     """The API account has exhausted its available credits/quota."""
 
 
+class AIProviderError(RuntimeError):
+    """A configured AI provider is temporarily unavailable."""
+
 
 SUPPORTED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
@@ -29,21 +32,12 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "remember_fact",
-        "description": (
-            "Store a durable fact about the user or this conversation: "
-            "people, names, interests, preferences, places, agreements."
-        ),
+        "description": "Store a durable fact about the user or this conversation: people, names, interests, preferences, places, agreements.",
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The fact to remember, as a short sentence.",
-                },
-                "category": {
-                    "type": "string",
-                    "enum": ["person", "interest", "preference", "name", "other"],
-                },
+                "content": {"type": "string", "description": "The fact to remember, as a short sentence."},
+                "category": {"type": "string", "enum": ["person", "interest", "preference", "name", "other"]},
             },
             "required": ["content", "category"],
             "additionalProperties": False,
@@ -53,18 +47,10 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "forget_fact",
-        "description": (
-            "Forget previously stored facts matching the query. "
-            "Use when the user asks to forget something."
-        ),
+        "description": "Forget previously stored facts matching the query. Use when the user asks to forget something.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "What to forget, in natural language.",
-                },
-            },
+            "properties": {"query": {"type": "string", "description": "What to forget, in natural language."}},
             "required": ["query"],
             "additionalProperties": False,
         },
@@ -73,18 +59,10 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "generate_image",
-        "description": (
-            "Generate an image from a text prompt and send it to the user. "
-            "Call this when the user asks to draw, generate, or create a picture."
-        ),
+        "description": "Generate an image from a text prompt and send it to the user. Call this when the user asks to draw, generate, or create a picture.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "Detailed image generation prompt.",
-                },
-            },
+            "properties": {"prompt": {"type": "string", "description": "Detailed image generation prompt."}},
             "required": ["prompt"],
             "additionalProperties": False,
         },
@@ -113,16 +91,24 @@ class OpenAIService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
+        self.openrouter = (
+            AsyncOpenAI(
+                api_key=settings.openrouter_api_key,
+                base_url="https://openrouter.ai/api/v1",
+                max_retries=0,
+            )
+            if settings.openrouter_api_key
+            else None
+        )
 
     async def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
         if not audio:
             raise ValueError("Empty audio payload")
         buf = BytesIO(audio)
         buf.name = filename
-        content_type = _audio_content_type(filename)
         response = await self.client.audio.transcriptions.create(
             model=self.settings.stt_model,
-            file=(filename, buf, content_type),
+            file=(filename, buf, _audio_content_type(filename)),
         )
         return (response.text or "").strip()
 
@@ -161,11 +147,7 @@ class OpenAIService:
     async def summarize(self, transcript: str) -> str:
         response = await self.client.responses.create(
             model=self.settings.extract_model,
-            instructions=(
-                "Summarize this chat excerpt in 5-8 concise sentences. "
-                "Keep names, decisions, open questions, and durable context. "
-                "Write in the same language as the excerpt."
-            ),
+            instructions="Summarize this chat excerpt in 5-8 concise sentences. Keep names, decisions, open questions, and durable context. Write in the same language as the excerpt.",
             input=transcript[:20000],
         )
         return (response.output_text or "").strip()
@@ -173,11 +155,7 @@ class OpenAIService:
     async def extract_facts(self, turn_text: str) -> list[dict[str, str]]:
         response = await self.client.responses.create(
             model=self.settings.extract_model,
-            instructions=(
-                "Extract durable facts worth remembering from this conversation turn: "
-                "people, names, interests, preferences, places, agreements. "
-                "Skip small talk and one-off requests. If nothing durable, return an empty list."
-            ),
+            instructions="Extract durable facts worth remembering from this conversation turn: people, names, interests, preferences, places, agreements. Skip small talk and one-off requests. If nothing durable, return an empty list.",
             input=turn_text[:12000],
             text={
                 "format": {
@@ -193,20 +171,8 @@ class OpenAIService:
                                     "type": "object",
                                     "properties": {
                                         "content": {"type": "string"},
-                                        "category": {
-                                            "type": "string",
-                                            "enum": [
-                                                "person",
-                                                "interest",
-                                                "preference",
-                                                "name",
-                                                "other",
-                                            ],
-                                        },
-                                        "action": {
-                                            "type": "string",
-                                            "enum": ["add", "forget"],
-                                        },
+                                        "category": {"type": "string", "enum": ["person", "interest", "preference", "name", "other"]},
+                                        "action": {"type": "string", "enum": ["add", "forget"]},
                                     },
                                     "required": ["content", "category", "action"],
                                     "additionalProperties": False,
@@ -219,18 +185,52 @@ class OpenAIService:
                 }
             },
         )
-        raw = response.output_text or '{"items":[]}'
         try:
-            payload = json.loads(raw)
+            payload = json.loads(response.output_text or '{"items":[]}')
         except json.JSONDecodeError:
-            logger.warning("Fact extraction returned non-JSON: %s", raw[:300])
+            logger.warning("Fact extraction returned non-JSON")
             return []
-        items = payload.get("items") or []
-        return [item for item in items if isinstance(item, dict)]
+        return [item for item in payload.get("items", []) if isinstance(item, dict)]
 
     async def chat(
         self,
         *,
+        instructions: str,
+        messages: list[OpenAIInputMessage],
+        tool_handler: ToolHandler,
+    ) -> ChatResult:
+        last_error: Exception | None = None
+        for provider in self.settings.ai_providers:
+            if provider == "gemini" and self.settings.gemini_api_key:
+                try:
+                    logger.info("AI provider: gemini")
+                    return await self._chat_gemini(instructions, messages, tool_handler)
+                except AIProviderError as exc:
+                    last_error = exc
+                    logger.warning("Gemini unavailable; falling back: %s", exc)
+            elif provider == "openrouter" and self.openrouter:
+                try:
+                    logger.info("AI provider: openrouter")
+                    return await self._chat_openrouter(instructions, messages, tool_handler)
+                except AIProviderError as exc:
+                    last_error = exc
+                    logger.warning("OpenRouter unavailable; falling back: %s", exc)
+            elif provider == "openai" and self.settings.openai_api_key:
+                try:
+                    logger.info("AI provider: openai")
+                    return await self._chat_openai(instructions, messages, tool_handler)
+                except OpenAIQuotaError as exc:
+                    last_error = exc
+                    logger.warning("OpenAI quota exhausted; no further provider configured")
+                except RateLimitError as exc:
+                    last_error = exc
+                    logger.warning("OpenAI rate limited; no further provider configured")
+        if last_error:
+            raise last_error
+        raise AIProviderError("No AI provider is configured")
+
+    async def _chat_openai(
+        self,
         instructions: str,
         messages: list[OpenAIInputMessage],
         tool_handler: ToolHandler,
@@ -240,7 +240,6 @@ class OpenAIService:
         image_prompt: str | None = None
         previous_response_id: str | None = None
         current_input: Any = openai_input
-
         for _ in range(8):
             kwargs: dict[str, Any] = {
                 "model": self.settings.chat_model,
@@ -251,7 +250,6 @@ class OpenAIService:
             if previous_response_id:
                 kwargs["previous_response_id"] = previous_response_id
                 kwargs.pop("instructions", None)
-
             try:
                 response = await self.client.responses.create(**kwargs)
             except RateLimitError as exc:
@@ -259,54 +257,106 @@ class OpenAIService:
                     raise OpenAIQuotaError("OpenAI API quota is exhausted") from exc
                 raise
             previous_response_id = response.id
-            calls = [
-                item
-                for item in (response.output or [])
-                if getattr(item, "type", None) == "function_call"
-            ]
+            calls = [item for item in (response.output or []) if getattr(item, "type", None) == "function_call"]
             if not calls:
-                return ChatResult(
-                    text=(response.output_text or "").strip(),
-                    image_bytes=image_bytes,
-                    image_prompt=image_prompt,
-                )
-
+                return ChatResult((response.output_text or "").strip(), image_bytes, "image/png" if image_bytes else None, image_prompt)
             outputs: list[dict[str, Any]] = []
             for call in calls:
-                name = call.name
-                try:
-                    parsed_args = json.loads(call.arguments or "{}")
-                except json.JSONDecodeError:
-                    parsed_args = {}
-                args = parsed_args if isinstance(parsed_args, dict) else {}
-                if name == "generate_image":
-                    prompt = str(args.get("prompt") or "").strip()
-                    if not prompt:
-                        tool_output = "Image generation requires a non-empty prompt."
-                    else:
-                        try:
-                            image_bytes = await self.generate_image(prompt)
-                            image_prompt = prompt
-                            tool_output = "Image generated and will be sent to the user."
-                        except Exception:
-                            logger.exception("Image generation failed")
-                            tool_output = "Image generation failed. Tell the user it did not work."
-                else:
-                    tool_output = await tool_handler(name, args)
-                outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": tool_output,
-                    }
-                )
+                tool_output, image_bytes, image_prompt = await self._run_tool(call.name, call.arguments, tool_handler, image_bytes, image_prompt)
+                outputs.append({"type": "function_call_output", "call_id": call.call_id, "output": tool_output})
             current_input = outputs
+        return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
-        return ChatResult(
-            text="I could not finish the tool loop. Please try again.",
-            image_bytes=image_bytes,
-            image_prompt=image_prompt,
-        )
+    async def _chat_openrouter(self, instructions: str, messages: list[OpenAIInputMessage], tool_handler: ToolHandler) -> ChatResult:
+        if not self.openrouter:
+            raise AIProviderError("OpenRouter API key is missing")
+        history: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
+        history.extend(_to_chat_message(message) for message in messages)
+        image_bytes: bytes | None = None
+        image_prompt: str | None = None
+        for _ in range(8):
+            try:
+                response = await self.openrouter.chat.completions.create(
+                    model=self.settings.openrouter_chat_model,
+                    messages=history,
+                    tools=[_to_openai_chat_tool(tool) for tool in CHAT_TOOLS],
+                )
+            except Exception as exc:
+                raise _provider_error("OpenRouter", exc) from exc
+            choice = response.choices[0].message
+            if not choice.tool_calls:
+                return ChatResult((choice.content or "").strip(), image_bytes, "image/png" if image_bytes else None, image_prompt)
+            history.append(choice.model_dump(exclude_none=True))
+            for call in choice.tool_calls:
+                tool_output, image_bytes, image_prompt = await self._run_tool(call.function.name, call.function.arguments, tool_handler, image_bytes, image_prompt)
+                history.append({"role": "tool", "tool_call_id": call.id, "content": tool_output})
+        return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
+
+    async def _chat_gemini(self, instructions: str, messages: list[OpenAIInputMessage], tool_handler: ToolHandler) -> ChatResult:
+        contents = [_to_gemini_message(message) for message in messages]
+        tools = [{"functionDeclarations": [_to_gemini_tool(tool) for tool in CHAT_TOOLS]}]
+        image_bytes: bytes | None = None
+        image_prompt: str | None = None
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.settings.gemini_chat_model}:generateContent"
+        headers = {"x-goog-api-key": self.settings.gemini_api_key}
+        async with httpx.AsyncClient(timeout=60) as http:
+            for _ in range(8):
+                payload = {"systemInstruction": {"parts": [{"text": instructions}]}, "contents": contents, "tools": tools}
+                try:
+                    response = await http.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                except Exception as exc:
+                    raise _provider_error("Gemini", exc) from exc
+                data = response.json()
+                candidate = (data.get("candidates") or [{}])[0]
+                content = candidate.get("content") or {}
+                parts = content.get("parts") or []
+                calls = [part.get("functionCall") for part in parts if part.get("functionCall")]
+                if not calls:
+                    text = "".join(part.get("text", "") for part in parts).strip()
+                    return ChatResult(text, image_bytes, "image/png" if image_bytes else None, image_prompt)
+                contents.append(content)
+                for call in calls:
+                    args = call.get("args") or {}
+                    tool_output, image_bytes, image_prompt = await self._run_tool(call.get("name", ""), json.dumps(args), tool_handler, image_bytes, image_prompt)
+                    contents.append({"role": "user", "parts": [{"functionResponse": {"name": call.get("name", ""), "id": call.get("id"), "response": {"result": tool_output}}}]})
+        return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
+
+    async def _run_tool(
+        self,
+        name: str,
+        raw_arguments: str,
+        tool_handler: ToolHandler,
+        image_bytes: bytes | None,
+        image_prompt: str | None,
+    ) -> tuple[str, bytes | None, str | None]:
+        try:
+            args = json.loads(raw_arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        args = args if isinstance(args, dict) else {}
+        if name == "generate_image":
+            prompt = str(args.get("prompt") or "").strip()
+            if not prompt:
+                return "Image generation requires a non-empty prompt.", image_bytes, image_prompt
+            try:
+                image_bytes = await self.generate_image(prompt)
+                return "Image generated and will be sent to the user.", image_bytes, prompt
+            except Exception:
+                logger.exception("Image generation failed")
+                return "Image generation failed. Tell the user it did not work.", image_bytes, image_prompt
+        return await tool_handler(name, args), image_bytes, image_prompt
+
+
+def _provider_error(provider: str, exc: Exception) -> AIProviderError:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    if isinstance(exc, httpx.TimeoutException):
+        return AIProviderError(f"{provider} timeout")
+    if status in {429, 500, 502, 503, 504}:
+        return AIProviderError(f"{provider} temporarily unavailable ({status})")
+    raise exc
 
 
 def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
@@ -317,18 +367,34 @@ def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
         if mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
             raise ValueError(f"Unsupported image MIME type: {mime_type}")
         b64 = base64.b64encode(message.image_bytes).decode("ascii")
-        text = message.text or "Please look at this image."
-        return {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": text},
-                {
-                    "type": "input_image",
-                    "image_url": f"data:{mime_type};base64,{b64}",
-                },
-            ],
-        }
+        return {"role": "user", "content": [{"type": "input_text", "text": message.text or "Please look at this image."}, {"type": "input_image", "image_url": f"data:{mime_type};base64,{b64}"}]}
     return {"role": "user", "content": message.text or ""}
+
+
+def _to_chat_message(message: OpenAIInputMessage) -> dict[str, Any]:
+    if message.image_bytes:
+        mime = message.image_mime_type or "image/jpeg"
+        b64 = base64.b64encode(message.image_bytes).decode("ascii")
+        return {"role": "user", "content": [{"type": "text", "text": message.text or "Please look at this image."}, {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]}
+    return {"role": message.role, "content": message.text or ""}
+
+
+def _to_openai_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "function", "function": {"name": tool["name"], "description": tool["description"], "parameters": tool["parameters"]}}
+
+
+def _to_gemini_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    return {"name": tool["name"], "description": tool["description"], "parameters": tool["parameters"]}
+
+
+def _to_gemini_message(message: OpenAIInputMessage) -> dict[str, Any]:
+    role = "model" if message.role == "assistant" else "user"
+    parts: list[dict[str, Any]] = []
+    if message.text:
+        parts.append({"text": message.text})
+    if message.image_bytes:
+        parts.append({"inlineData": {"mimeType": message.image_mime_type or "image/jpeg", "data": base64.b64encode(message.image_bytes).decode("ascii")}})
+    return {"role": role, "parts": parts or [{"text": ""}]}
 
 
 def _audio_content_type(filename: str) -> str:
@@ -345,7 +411,4 @@ def _audio_content_type(filename: str) -> str:
 
 
 def _is_insufficient_quota(exc: RateLimitError) -> bool:
-    return (
-        getattr(exc, "code", None) == "insufficient_quota"
-        or "credit_balance_exhausted" in str(exc)
-    )
+    return getattr(exc, "code", None) == "insufficient_quota" or "credit_balance_exhausted" in str(exc)
