@@ -61,6 +61,7 @@ async def run() -> None:
     )
 
     try:
+        await coalescer.recover_pending()
         logger.info("Starting polling")
         await dp.start_polling(bot)
     finally:
