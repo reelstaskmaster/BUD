@@ -89,6 +89,7 @@ CHAT_TOOLS: list[dict[str, Any]] = [
 class ChatResult:
     text: str
     image_bytes: bytes | None = None
+    image_mime_type: str | None = None
     image_prompt: str | None = None
 
 
@@ -297,7 +298,7 @@ def _to_input_item(message: OpenAIInputMessage) -> dict[str, Any]:
                 {"type": "input_text", "text": text},
                 {
                     "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{b64}",
+                    "image_url": f"data:{message.image_mime_type or 'image/jpeg'};base64,{b64}",
                 },
             ],
         }
