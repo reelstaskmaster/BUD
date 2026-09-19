@@ -57,6 +57,18 @@ class ChatCoalescer:
             self._states[chat_id] = state
         return state
 
+    async def shutdown(self) -> None:
+        states = list(self._states.values())
+        tasks: list[asyncio.Task[None]] = []
+        for state in states:
+            for task in (state.process_task, state.typing_task):
+                if task and not task.done():
+                    task.cancel()
+                    tasks.append(task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._states.clear()
+
     async def notify(self, chat_id: int) -> None:
         state = self._state(chat_id)
         async with state.lock:
