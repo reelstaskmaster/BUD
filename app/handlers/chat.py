@@ -148,7 +148,6 @@ async def _ingest_audio(
     if not text:
         await message.answer("Пустая расшифровка, отправь ещё раз.")
         return
-    logger.info("Transcribed voice for chat %s: %s", message.chat.id, text[:200])
     caption = (message.caption or "").strip()
     content = f"{caption}\n{text}".strip() if caption else text
     async with session_factory() as session:
