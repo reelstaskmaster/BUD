@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -91,6 +92,7 @@ class OpenAIService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
+        self._provider_cooldowns: dict[str, float] = {}
         self.openrouter = (
             AsyncOpenAI(
                 api_key=settings.openrouter_api_key,
@@ -205,12 +207,18 @@ class OpenAIService:
 
         last_error: Exception | None = None
         for provider in self.settings.ai_providers:
+            cooldown_until = self._provider_cooldowns.get(provider, 0.0)
+            if cooldown_until > time.monotonic():
+                logger.info("AI provider %s is cooling down", provider)
+                continue
+            self._provider_cooldowns.pop(provider, None)
             if provider == "gemini" and self.settings.gemini_api_key:
                 try:
                     logger.info("AI provider: gemini")
                     return await self._chat_gemini(instructions, messages, tool_handler)
                 except AIProviderError as exc:
                     last_error = exc
+                    self._cool_down(provider)
                     logger.warning("Gemini unavailable; falling back: %s", exc)
             elif provider == "openrouter" and self.openrouter:
                 try:
@@ -218,6 +226,7 @@ class OpenAIService:
                     return await self._chat_openrouter(instructions, messages, tool_handler)
                 except AIProviderError as exc:
                     last_error = exc
+                    self._cool_down(provider)
                     logger.warning("OpenRouter unavailable; falling back: %s", exc)
             elif provider == "openai" and self.settings.openai_api_key:
                 try:
@@ -225,16 +234,22 @@ class OpenAIService:
                     return await self._chat_openai(instructions, messages, tool_handler)
                 except OpenAIQuotaError as exc:
                     last_error = exc
-                    logger.warning("OpenAI quota exhausted; no further provider configured")
+                    self._cool_down(provider, 300.0)
+                    logger.warning("OpenAI quota exhausted; cooling provider down")
                 except RateLimitError as exc:
                     last_error = exc
+                    self._cool_down(provider)
                     logger.warning("OpenAI rate limited; falling back")
                 except (APIConnectionError, APITimeoutError) as exc:
                     last_error = AIProviderError(f"OpenAI temporarily unavailable: {exc}")
+                    self._cool_down(provider)
                     logger.warning("OpenAI unavailable; falling back")
         if last_error:
             raise last_error
         raise AIProviderError("No AI provider is configured")
+
+    def _cool_down(self, provider: str, seconds: float = 30.0) -> None:
+        self._provider_cooldowns[provider] = time.monotonic() + seconds
 
     async def _chat_openai(
         self,
