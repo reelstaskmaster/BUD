@@ -137,6 +137,8 @@ class MemoryService:
             return
         async with self.session_factory() as session:
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 content = str(item.get("content") or "").strip()
                 if not content:
                     continue
