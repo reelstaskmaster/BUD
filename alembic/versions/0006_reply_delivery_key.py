@@ -18,7 +18,14 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE reply_deliveries
-        SET delivery_key = md5(chat_id::text || ':' || source_message_ids::text)
+        SET delivery_key = md5(
+            chat_id::text || ':' ||
+            (
+                SELECT string_agg(value, ',' ORDER BY ordinality)
+                FROM json_array_elements_text(source_message_ids)
+                WITH ORDINALITY AS items(value, ordinality)
+            )
+        )
         """
     )
     op.alter_column("reply_deliveries", "delivery_key", nullable=False)
