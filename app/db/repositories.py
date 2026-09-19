@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import datetime
 
@@ -305,7 +306,11 @@ async def create_reply_delivery(
     media_type: str,
     image_bytes: bytes | None,
 ) -> ReplyDelivery:
+    delivery_key = hashlib.sha256(
+        f"{chat_id}:{','.join(str(item) for item in source_message_ids)}".encode()
+    ).hexdigest()
     delivery = ReplyDelivery(
+        delivery_key=delivery_key,
         chat_id=chat_id,
         source_message_ids=[str(item) for item in source_message_ids],
         content=content,
