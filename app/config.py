@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     extract_model: str = "gpt-4.1-mini"
     embedding_model: str = "text-embedding-3-small"
     stt_model: str = "whisper-1"
-    image_model: str = "gpt-image-1"
+    image_model: str = "gpt-image-2"
 
     recent_messages: int = Field(default=16, ge=1, le=200)
     fact_top_k: int = Field(default=10, ge=1, le=100)
