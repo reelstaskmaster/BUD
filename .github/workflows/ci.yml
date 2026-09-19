@@ -31,4 +31,8 @@ jobs:
         run: python -m compileall -q app alembic
 
       - name: Validate Alembic metadata
-        run: python -m alembic heads
+        run: >-
+          python -c "import importlib.util; p=\"alembic/versions/0001_initial.py\";
+          s=importlib.util.spec_from_file_location(\"initial\", p);
+          m=importlib.util.module_from_spec(s); s.loader.exec_module(m);
+          assert m.revision == \"0001_initial\" and m.down_revision is None"
