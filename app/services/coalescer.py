@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -49,6 +50,7 @@ class ChatCoalescer:
         self.debounce_s = debounce_s
         self.after_reply = after_reply
         self._states: dict[int, ChatState] = {}
+        self._owner = uuid.uuid4().hex
 
     def _state(self, chat_id: int) -> ChatState:
         state = self._states.get(chat_id)
@@ -109,11 +111,26 @@ class ChatCoalescer:
     async def _process_loop(self, chat_id: int) -> None:
         state = self._state(chat_id)
         failed = False
+        claimed = False
         try:
             await asyncio.sleep(self.debounce_s)
+            async with self.session_factory() as session:
+                claimed = await repo.claim_chat_processing(
+                    session, chat_id, self._owner
+                )
+                await session.commit()
+            if not claimed:
+                return
             while True:
                 async with self.session_factory() as session:
-                    batch = await repo.list_unanswered(session, chat_id)
+                    claimed = await repo.claim_chat_processing(
+                        session, chat_id, self._owner
+                    )
+                    if claimed:
+                        batch = await repo.list_unanswered(session, chat_id)
+                    else:
+                        batch = []
+                    await session.commit()
                 if not batch:
                     break
                 batch_ids = {message.id for message in batch}
@@ -167,6 +184,17 @@ class ChatCoalescer:
                     task.add_done_callback(self._log_background_failure)
                 break
         finally:
+            if claimed:
+                try:
+                    async with self.session_factory() as session:
+                        await repo.release_chat_processing(
+                            session, chat_id, self._owner
+                        )
+                        await session.commit()
+                except Exception:
+                    logger.exception(
+                        "Failed to release processing lease for chat %s", chat_id
+                    )
             async with state.lock:
                 state.busy = False
                 state.process_task = None
