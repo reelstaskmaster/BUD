@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
 import mimetypes
+from io import BytesIO
 
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -46,12 +46,15 @@ class ReplyPipeline:
             image_mime_type = None
             if message.media_type == "photo" and message.telegram_file_id:
                 image_bytes, image_mime_type = await self._download_file(message.telegram_file_id)
+            resolved_mime_type = (
+                message.media_mime_type or image_mime_type if image_bytes else None
+            )
             openai_messages.append(
                 OpenAIInputMessage(
                     role=message.role,
                     text=_message_text_for_llm(message),
                     image_bytes=image_bytes,
-                    image_mime_type=message.media_mime_type or image_mime_type if image_bytes else None,
+                    image_mime_type=resolved_mime_type,
                 )
             )
 
@@ -73,6 +76,8 @@ class ReplyPipeline:
         stream = BytesIO()
         await self.bot.download_file(file.file_path, destination=stream)
         data = stream.getvalue()
+        if not data:
+            raise RuntimeError(f"Downloaded empty file for {file_id}")
         mime_type, _ = mimetypes.guess_type(file.file_path)
         return data, mime_type
 
