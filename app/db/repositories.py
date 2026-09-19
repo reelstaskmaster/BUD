@@ -355,3 +355,15 @@ async def list_pending_reply_deliveries(
         .limit(limit)
     )
     return list(result.all())
+
+
+async def list_pending_reply_chat_ids(
+    session: AsyncSession, limit: int = 1000
+) -> list[int]:
+    result = await session.scalars(
+        select(ReplyDelivery.chat_id)
+        .where(ReplyDelivery.status == "pending")
+        .distinct()
+        .limit(limit)
+    )
+    return list(result.all())
