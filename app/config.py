@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     ai_chain: str = "gemini,openrouter,openai"
     gemini_chat_model: str = "gemini-3.8-flash"
     openrouter_chat_model: str = "openrouter/free"
+    openrouter_image_model: str = "google/gemini-3.1-flash-image"
 
     chat_model: str = "gpt-4.1"
     extract_model: str = "gpt-4.1-mini"
