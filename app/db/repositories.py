@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -250,3 +250,35 @@ async def deactivate_facts(session: AsyncSession, fact_ids: list[uuid.UUID]) -> 
         .values(active=False)
     )
     return int(result.rowcount or 0)
+
+
+async def claim_chat_processing(
+    session: AsyncSession, chat_id: int, owner: str
+) -> bool:
+    result = await session.execute(
+        update(Chat)
+        .where(
+            Chat.id == chat_id,
+            (
+                Chat.processing_until.is_(None)
+                | (Chat.processing_until < func.now())
+                | (Chat.processing_owner == owner)
+            ),
+        )
+        .values(
+            processing_owner=owner,
+            processing_until=func.now() + text("interval '15 minutes'"),
+        )
+        .returning(Chat.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def release_chat_processing(
+    session: AsyncSession, chat_id: int, owner: str
+) -> None:
+    await session.execute(
+        update(Chat)
+        .where(Chat.id == chat_id, Chat.processing_owner == owner)
+        .values(processing_owner=None, processing_until=None)
+    )
