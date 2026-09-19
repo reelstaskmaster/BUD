@@ -28,6 +28,10 @@ class Chat(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    processing_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processing_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     messages: Mapped[list["Message"]] = relationship(back_populates="chat")
     summaries: Mapped[list["Summary"]] = relationship(back_populates="chat")
