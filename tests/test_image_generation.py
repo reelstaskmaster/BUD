@@ -85,3 +85,34 @@ async def test_openrouter_image_generation_works_without_reference(monkeypatch) 
 
     assert result == b"generated-image"
     assert "input_references" not in fake_client.payload
+
+
+class BadBase64Response(FakeResponse):
+    def json(self) -> dict:
+        return {"data": [{"b64_json": "not-valid-base64!!!"}]}
+
+
+@pytest.mark.asyncio
+async def test_openrouter_image_generation_rejects_invalid_base64(monkeypatch) -> None:
+    service = object.__new__(OpenAIService)
+    service.settings = SimpleNamespace(
+        openrouter_api_key_pool=["key-1"],
+        openrouter_api_key="",
+        openrouter_image_model="google/gemini-3.1-flash-image",
+    )
+    service._key_cooldowns = {}
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        "app.services.openai_client.httpx.AsyncClient",
+        lambda **_kwargs: fake_client,
+    )
+    fake_client.post = BadBase64Post().__call__
+
+    with pytest.raises(Exception, match="invalid base64"):
+        await service.generate_image("test")
+
+
+class BadBase64Post:
+    def __call__(self, _url, *, headers, json):
+        return BadBase64Response()
