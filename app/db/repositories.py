@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chat, Fact, Message, Summary
@@ -10,9 +11,14 @@ from app.db.models import Chat, Fact, Message, Summary
 async def get_or_create_chat(session: AsyncSession, chat_id: int) -> Chat:
     chat = await session.get(Chat, chat_id)
     if chat is None:
-        chat = Chat(id=chat_id)
-        session.add(chat)
-        await session.flush()
+        await session.execute(
+            pg_insert(Chat)
+            .values(id=chat_id)
+            .on_conflict_do_nothing(index_elements=[Chat.id])
+        )
+        chat = await session.get(Chat, chat_id)
+        if chat is None:
+            raise RuntimeError(f"Failed to create chat {chat_id}")
     return chat
 
 
