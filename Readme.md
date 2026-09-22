@@ -4,3 +4,14 @@
 2. `docker compose up -d --build`
 
 Миграции применятся сами при старте контейнера бота.
+
+
+## FreeLLMAPI fallback
+
+BUD can optionally route chat requests through a local FreeLLMAPI instance. Set FREELLMAPI_API_KEY, FREELLMAPI_BASE_URL, and keep freellmapi in AI_CHAIN. With FREELLMAPI_CHAT_MODEL=auto, the router chooses an available model.
+
+The BUD integration uses FreeLLMAPI for chat/tool calls only. Embeddings, transcription, and image generation remain on their existing providers.
+
+FreeLLMAPI runs separately from BUD. Its official Docker image is ghcr.io/tashfeenahmed/freellmapi:latest; after startup, add provider keys in its dashboard and copy the unified API key into BUD. The project documents an OpenAI-compatible /v1 API and automatic provider failover.
+
+FreeLLMAPI is intended for personal experimentation rather than production inference, so BUD retains its existing OpenRouter/OpenAI fallbacks.
