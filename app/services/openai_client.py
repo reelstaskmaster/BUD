@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import time
+from uuid import uuid4
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -91,13 +92,24 @@ class OpenAIInputMessage:
 class OpenAIService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0, timeout=settings.ai_request_timeout_s)
         self._provider_cooldowns: dict[str, float] = {}
+        self.freellmapi = (
+            AsyncOpenAI(
+                api_key=settings.freellmapi_api_key,
+                base_url=settings.freellmapi_base_url,
+                max_retries=0,
+                timeout=settings.ai_request_timeout_s,
+            )
+            if settings.freellmapi_api_key
+            else None
+        )
         self.openrouter = (
             AsyncOpenAI(
                 api_key=settings.openrouter_api_key,
                 base_url="https://openrouter.ai/api/v1",
                 max_retries=0,
+                timeout=settings.ai_request_timeout_s,
             )
             if settings.openrouter_api_key
             else None
@@ -140,7 +152,7 @@ class OpenAIService:
             return base64.b64decode(b64)
         url = getattr(item, "url", None)
         if url:
-            async with httpx.AsyncClient(timeout=60) as http:
+            async with httpx.AsyncClient(timeout=self.settings.ai_request_timeout_s) as http:
                 downloaded = await http.get(url)
                 downloaded.raise_for_status()
                 return downloaded.content
@@ -200,7 +212,11 @@ class OpenAIService:
         instructions: str,
         messages: list[OpenAIInputMessage],
         tool_handler: ToolHandler,
+        request_id: str | None = None,
     ) -> ChatResult:
+        request_id = request_id or uuid4().hex[:12]
+        started = time.monotonic()
+        logger.info("AI request %s started providers=%s", request_id, self.settings.ai_providers)
         # Keep existing unit-test doubles and legacy callers on the original OpenAI path.
         if not hasattr(self.settings, "ai_providers"):
             return await self._chat_openai(instructions, messages, tool_handler)
@@ -218,15 +234,30 @@ class OpenAIService:
             if provider == "gemini" and self.settings.gemini_api_key:
                 try:
                     logger.info("AI provider: gemini")
-                    return await self._chat_gemini(instructions, messages, tool_handler)
+                    result = await self._chat_gemini(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=gemini latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
                     logger.warning("Gemini unavailable; falling back: %s", exc)
+            elif provider == "freellmapi" and self.freellmapi:
+                try:
+                    logger.info("AI provider: freellmapi")
+                    result = await self._chat_freellmapi(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=freellmapi latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
+                except AIProviderError as exc:
+                    last_error = exc
+                    self._cool_down(provider)
+                    logger.warning("FreeLLMAPI unavailable; falling back: %s", exc)
+                except RateLimitError as exc:
+                    last_error = exc
+                    self._cool_down(provider)
+                    logger.warning("FreeLLMAPI rate limited; falling back")
             elif provider == "openrouter" and self.openrouter:
                 try:
                     logger.info("AI provider: openrouter")
-                    return await self._chat_openrouter(instructions, messages, tool_handler)
+                    result = await self._chat_openrouter(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=openrouter latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -234,7 +265,8 @@ class OpenAIService:
             elif provider == "openai" and self.settings.openai_api_key:
                 try:
                     logger.info("AI provider: openai")
-                    return await self._chat_openai(instructions, messages, tool_handler)
+                    result = await self._chat_openai(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=openai latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except OpenAIQuotaError as exc:
                     last_error = exc
                     self._cool_down(provider, 300.0)
@@ -265,7 +297,7 @@ class OpenAIService:
         image_prompt: str | None = None
         previous_response_id: str | None = None
         current_input: Any = openai_input
-        for _ in range(8):
+        for _ in range(self.settings.ai_max_tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": self.settings.chat_model,
                 "instructions": instructions,
@@ -292,6 +324,42 @@ class OpenAIService:
             current_input = outputs
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
+    async def _chat_freellmapi(
+        self,
+        instructions: str,
+        messages: list[OpenAIInputMessage],
+        tool_handler: ToolHandler,
+    ) -> ChatResult:
+        if not self.freellmapi:
+            raise AIProviderError("FreeLLMAPI API key is missing")
+        history: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
+        history.extend(_to_chat_message(message) for message in messages)
+        image_bytes: bytes | None = None
+        image_prompt: str | None = None
+        for _ in range(self.settings.ai_max_tool_rounds):
+            try:
+                response = await self.freellmapi.chat.completions.create(
+                    model=self.settings.freellmapi_chat_model,
+                    messages=history,
+                    tools=[_to_openai_chat_tool(tool) for tool in CHAT_TOOLS],
+                )
+            except Exception as exc:
+                raise _provider_error("FreeLLMAPI", exc) from exc
+            choice = response.choices[0].message
+            if not choice.tool_calls:
+                return ChatResult((choice.content or "").strip(), image_bytes, "image/png" if image_bytes else None, image_prompt)
+            history.append(choice.model_dump(exclude_none=True))
+            for call in choice.tool_calls:
+                tool_output, image_bytes, image_prompt = await self._run_tool(
+                    call.function.name,
+                    call.function.arguments,
+                    tool_handler,
+                    image_bytes,
+                    image_prompt,
+                )
+                history.append({"role": "tool", "tool_call_id": call.id, "content": tool_output})
+        return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
+
     async def _chat_openrouter(self, instructions: str, messages: list[OpenAIInputMessage], tool_handler: ToolHandler) -> ChatResult:
         if not self.openrouter:
             raise AIProviderError("OpenRouter API key is missing")
@@ -299,7 +367,7 @@ class OpenAIService:
         history.extend(_to_chat_message(message) for message in messages)
         image_bytes: bytes | None = None
         image_prompt: str | None = None
-        for _ in range(8):
+        for _ in range(self.settings.ai_max_tool_rounds):
             try:
                 response = await self.openrouter.chat.completions.create(
                     model=self.settings.openrouter_chat_model,
@@ -325,7 +393,7 @@ class OpenAIService:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.settings.gemini_chat_model}:generateContent"
         headers = {"x-goog-api-key": self.settings.gemini_api_key}
         async with httpx.AsyncClient(timeout=60) as http:
-            for _ in range(8):
+            for _ in range(self.settings.ai_max_tool_rounds):
                 payload = {"systemInstruction": {"parts": [{"text": instructions}]}, "contents": contents, "tools": tools}
                 try:
                     response = await http.post(url, headers=headers, json=payload)

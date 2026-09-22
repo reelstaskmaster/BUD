@@ -1,4 +1,22 @@
 services:
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:latest
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      ENCRYPTION_KEY: ${FREELLMAPI_ENCRYPTION_KEY}
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - freellmapi-data:/app/server/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/ping').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
   db:
     image: pgvector/pgvector:pg16
     environment:
@@ -19,13 +37,17 @@ services:
   bot:
     build: .
     depends_on:
+      freellmapi:
+        condition: service_healthy
       db:
         condition: service_healthy
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://telegpt:telegpt@db:5432/telegpt
+      FREELLMAPI_BASE_URL: http://freellmapi:3001/v1
     restart: unless-stopped
 
 volumes:
+  freellmapi-data:
   pgdata:

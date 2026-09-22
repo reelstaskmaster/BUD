@@ -8,6 +8,8 @@ def test_default_runtime_bounds() -> None:
     settings = Settings(telegram_bot_token="token", openai_api_key="key")
     assert settings.recent_messages == 16
     assert settings.coalesce_debounce_s == 0.7
+    assert settings.ai_request_timeout_s == 60.0
+    assert settings.ai_max_tool_rounds == 8
 
 
 @pytest.mark.parametrize(
@@ -36,3 +38,10 @@ def test_rejects_excessive_debounce() -> None:
             openai_api_key="key",
             coalesce_debounce_ms=60_001,
         )
+
+
+def test_freellmapi_defaults() -> None:
+    settings = Settings(telegram_bot_token="token")
+    assert settings.freellmapi_base_url == "http://localhost:3001/v1"
+    assert settings.freellmapi_chat_model == "auto"
+    assert "freellmapi" in settings.ai_providers

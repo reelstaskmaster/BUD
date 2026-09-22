@@ -11,11 +11,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
     openrouter_api_key: str = ""
+    freellmapi_api_key: str = ""
+    freellmapi_base_url: str = "http://localhost:3001/v1"
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
-    ai_chain: str = "gemini,openrouter,openai"
+    ai_chain: str = "gemini,freellmapi,openrouter,openai"
     gemini_chat_model: str = "gemini-3.8-flash"
     openrouter_chat_model: str = "openrouter/free"
+    freellmapi_chat_model: str = "auto"
 
     chat_model: str = "gpt-4.1"
     extract_model: str = "gpt-4.1-mini"
@@ -29,6 +32,8 @@ class Settings(BaseSettings):
     summarize_every: int = Field(default=20, ge=1, le=1000)
     coalesce_debounce_ms: int = Field(default=700, ge=0, le=60_000)
     embedding_dims: int = Field(default=1536, gt=0, le=8192)
+    ai_request_timeout_s: float = Field(default=60.0, gt=1, le=300)
+    ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
 
     @property
     def coalesce_debounce_s(self) -> float:
