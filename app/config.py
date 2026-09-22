@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     summarize_every: int = Field(default=20, ge=1, le=1000)
     coalesce_debounce_ms: int = Field(default=700, ge=0, le=60_000)
     embedding_dims: int = Field(default=1536, gt=0, le=8192)
+    ai_request_timeout_s: float = Field(default=60.0, gt=1, le=300)
+    ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
 
     @property
     def coalesce_debounce_s(self) -> float:
