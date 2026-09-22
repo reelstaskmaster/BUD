@@ -358,9 +358,9 @@ async def test_chat_skips_cooled_key_and_uses_next_openrouter_key() -> None:
 def test_parse_fact_payload_accepts_markdown_json() -> None:
     from app.services.openai_client import _parse_fact_payload
 
-    payload = _parse_fact_payload("""\`\`\`json
+    payload = _parse_fact_payload("""```json
 {"items":[{"content":"Меня зовут Андрей","category":"name","action":"add"}]}
-\`\`\`""")
+```""")
     assert payload == {
         "items": [{"content": "Меня зовут Андрей", "category": "name", "action": "add"}]
     }
