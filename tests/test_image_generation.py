@@ -38,6 +38,7 @@ def make_service() -> OpenAIService:
     service.settings = SimpleNamespace(
         freellmapi_api_key="free-key",
         freellmapi_image_model="auto",
+        freellmapi_base_url="http://freellmapi.test/v1",
     )
     return service
 
