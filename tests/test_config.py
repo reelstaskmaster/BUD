@@ -36,3 +36,10 @@ def test_rejects_excessive_debounce() -> None:
             openai_api_key="key",
             coalesce_debounce_ms=60_001,
         )
+
+
+def test_freellmapi_defaults() -> None:
+    settings = Settings(telegram_bot_token="token")
+    assert settings.freellmapi_base_url == "http://localhost:3001/v1"
+    assert settings.freellmapi_chat_model == "auto"
+    assert "freellmapi" in settings.ai_providers
