@@ -97,13 +97,15 @@ class OpenAIService:
         self.settings = settings
         openai_keys = getattr(settings, "openai_api_key_pool", None) or ([settings.openai_api_key] if settings.openai_api_key else [])
         openrouter_keys = getattr(settings, "openrouter_api_key_pool", None) or ([settings.openrouter_api_key] if settings.openrouter_api_key else [])
-        self._openai_clients = [AsyncOpenAI(api_key=key, max_retries=0) for key in openai_keys]
+        freellmapi_key = getattr(settings, "freellmapi_api_key", "")
+        self._openai_clients = [AsyncOpenAI(api_key=key, max_retries=0, timeout=settings.ai_request_timeout_s) for key in openai_keys]
         self.client = self._openai_clients[0] if self._openai_clients else AsyncOpenAI(api_key="", max_retries=0)
         self._openrouter_clients = [
-            AsyncOpenAI(api_key=key, base_url="https://openrouter.ai/api/v1", max_retries=0)
+            AsyncOpenAI(api_key=key, base_url="https://openrouter.ai/api/v1", max_retries=0, timeout=settings.ai_request_timeout_s)
             for key in openrouter_keys
         ]
         self.openrouter = self._openrouter_clients[0] if self._openrouter_clients else None
+        self._freellmapi_client = AsyncOpenAI(api_key=freellmapi_key or "missing", base_url=settings.freellmapi_base_url, max_retries=0, timeout=settings.ai_request_timeout_s)
         self._provider_cooldowns: dict[str, float] = {}
         self._key_cooldowns: dict[tuple[str, int], float] = {}
         self._provider_next_index: dict[str, int] = {}
@@ -389,6 +391,7 @@ class OpenAIService:
 
         last_error: Exception | None = None
         provider_pools = {
+            "freellmapi": self._configured_keys("freellmapi"),
             "gemini": self._configured_keys("gemini"),
             "openrouter": self._configured_keys("openrouter"),
             "openai": self._configured_keys("openai"),
@@ -416,7 +419,9 @@ class OpenAIService:
                 attempted += 1
                 try:
                     logger.info("AI provider: %s key=%d/%d", provider, index + 1, len(keys))
-                    if provider == "gemini":
+                    if provider == "freellmapi":
+                        result = await self._chat_freellmapi(instructions, messages, tool_handler)
+                    elif provider == "gemini":
                         if len(keys) == 1:
                             result = await self._chat_gemini(instructions, messages, tool_handler)
                         else:
@@ -460,6 +465,55 @@ class OpenAIService:
         if last_error:
             raise last_error
         raise AIProviderError("No AI provider is configured")
+
+
+    async def _chat_freellmapi(
+        self,
+        instructions: str,
+        messages: list[OpenAIInputMessage],
+        tool_handler: ToolHandler,
+    ) -> ChatResult:
+        if not self.settings.freellmapi_api_key:
+            raise AIProviderError("FreeLLMAPI API key is missing")
+        history: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
+        history.extend(_to_chat_message(message) for message in messages)
+        image_bytes: bytes | None = None
+        image_prompt: str | None = None
+        for _ in range(self.settings.ai_max_tool_rounds):
+            try:
+                response = await self._freellmapi_client.chat.completions.create(
+                    model=self.settings.freellmapi_chat_model,
+                    messages=history,
+                    tools=[_to_openai_chat_tool(tool) for tool in CHAT_TOOLS],
+                )
+            except Exception as exc:
+                raise _provider_error("FreeLLMAPI", exc) from exc
+            choice = response.choices[0].message
+            if not choice.tool_calls:
+                return ChatResult(
+                    (choice.content or "").strip(),
+                    image_bytes,
+                    "image/png" if image_bytes else None,
+                    image_prompt,
+                )
+            history.append(choice.model_dump(exclude_none=True))
+            reference_image = _latest_reference_image(messages)
+            for call in choice.tool_calls:
+                tool_output, image_bytes, image_prompt = await self._run_tool(
+                    call.function.name,
+                    call.function.arguments,
+                    tool_handler,
+                    image_bytes,
+                    image_prompt,
+                    reference_image=reference_image,
+                )
+                history.append({"role": "tool", "tool_call_id": call.id, "content": tool_output})
+        return ChatResult(
+            "I could not finish the tool loop. Please try again.",
+            image_bytes,
+            "image/png" if image_bytes else None,
+            image_prompt,
+        )
 
     def _real_api_keys(self, provider: str) -> list[str]:
         pool_attr = f"{provider}_api_key_pool"
