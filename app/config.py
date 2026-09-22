@@ -19,9 +19,14 @@ class Settings(BaseSettings):
     gemini_api_keys: str = ""
     openrouter_api_key: str = ""
     openrouter_api_keys: str = ""
+    freellmapi_api_key: str = ""
+    freellmapi_base_url: str = "http://localhost:3001/v1"
+    freellmapi_chat_model: str = "auto"
+    ai_request_timeout_s: float = Field(default=60.0, gt=1, le=300)
+    ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
-    ai_chain: str = "gemini,openrouter,openai"
+    ai_chain: str = "freellmapi,openrouter,openai"
     gemini_chat_model: str = "gemini-3.8-flash"
     openrouter_chat_model: str = "openrouter/free"
     openrouter_image_model: str = "google/gemini-3.1-flash-image"
