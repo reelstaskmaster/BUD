@@ -21,7 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
-EMBEDDING_DIMS = 1536
+EMBEDDING_DIMS = 2048
 
 
 class Chat(Base):
