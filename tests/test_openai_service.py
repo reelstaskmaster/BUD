@@ -353,3 +353,31 @@ async def test_chat_skips_cooled_key_and_uses_next_openrouter_key() -> None:
 
     assert result.text == "ok"
     assert seen == ["client-1", "client-2"]
+
+
+def test_parse_fact_payload_accepts_markdown_json() -> None:
+    from app.services.openai_client import _parse_fact_payload
+
+    payload = _parse_fact_payload('\`\`\`json
+{"items":[{"content":"Меня зовут Андрей","category":"name","action":"add"}]}
+\`\`\`')
+    assert payload == {
+        "items": [{"content": "Меня зовут Андрей", "category": "name", "action": "add"}]
+    }
+
+
+def test_parse_fact_payload_accepts_json_embedded_in_prose() -> None:
+    from app.services.openai_client import _parse_fact_payload
+
+    payload = _parse_fact_payload(
+        'Вот результат:\n{"items":[{"content":"Любит Python","category":"interest","action":"add"}]}'
+    )
+    assert payload == {
+        "items": [{"content": "Любит Python", "category": "interest", "action": "add"}]
+    }
+
+
+def test_parse_fact_payload_rejects_non_json() -> None:
+    from app.services.openai_client import _parse_fact_payload
+
+    assert _parse_fact_payload("ничего сохранять не нужно") is None
