@@ -1,7 +1,10 @@
 Как запустить:
 
 1. Скопируй `.env.example` в `.env` и пропиши `TELEGRAM_BOT_TOKEN` и `OPENAI_API_KEY`
-2. `docker compose up -d --build`
+2. Сгенерируй `FREELLMAPI_ENCRYPTION_KEY` (64 hex-символа) и добавь его в `.env`
+3. `docker compose up -d --build`
+4. Открой `http://localhost:3001`, добавь ключи провайдеров в FreeLLMAPI и создай unified API key. Вставь его как `FREELLMAPI_API_KEY` в `.env`.
+5. Перезапусти BUD: `docker compose up -d --build bot`
 
 Миграции применятся сами при старте контейнера бота.
 
