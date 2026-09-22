@@ -33,14 +33,6 @@ def upgrade() -> None:
         type_=Vector(EMBEDDING_DIMS),
         existing_nullable=True,
     )
-    op.execute(
-        "CREATE INDEX ix_facts_embedding ON facts "
-        "USING hnsw (embedding vector_cosine_ops)"
-    )
-    op.execute(
-        "CREATE INDEX ix_summaries_embedding ON summaries "
-        "USING hnsw (embedding vector_cosine_ops)"
-    )
 
 
 def downgrade() -> None:
@@ -61,12 +53,4 @@ def downgrade() -> None:
         existing_type=Vector(EMBEDDING_DIMS),
         type_=Vector(1536),
         existing_nullable=True,
-    )
-    op.execute(
-        "CREATE INDEX ix_facts_embedding ON facts "
-        "USING hnsw (embedding vector_cosine_ops)"
-    )
-    op.execute(
-        "CREATE INDEX ix_summaries_embedding ON summaries "
-        "USING hnsw (embedding vector_cosine_ops)"
     )
