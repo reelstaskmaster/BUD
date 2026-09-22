@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
-    ai_chain: str = "freellmapi"
+    ai_chain: str = "freellmapi,gemini"
     gemini_chat_model: str = "gemini-3.8-flash"
     openrouter_chat_model: str = "openrouter/free"
     openrouter_image_model: str = "google/gemini-3.1-flash-image"
