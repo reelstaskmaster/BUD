@@ -98,14 +98,29 @@ class OpenAIService:
         openai_keys = getattr(settings, "openai_api_key_pool", None) or ([settings.openai_api_key] if settings.openai_api_key else [])
         openrouter_keys = getattr(settings, "openrouter_api_key_pool", None) or ([settings.openrouter_api_key] if settings.openrouter_api_key else [])
         freellmapi_key = getattr(settings, "freellmapi_api_key", "")
-        self._openai_clients = [AsyncOpenAI(api_key=key, max_retries=0, timeout=settings.ai_request_timeout_s) for key in openai_keys]
-        self.client = self._openai_clients[0] if self._openai_clients else AsyncOpenAI(api_key="", max_retries=0)
+        self._freellmapi_client = AsyncOpenAI(
+            api_key=freellmapi_key or "missing",
+            base_url=settings.freellmapi_base_url,
+            max_retries=0,
+            timeout=settings.ai_request_timeout_s,
+        )
+        self._openai_clients = [
+            AsyncOpenAI(api_key=key, max_retries=0, timeout=settings.ai_request_timeout_s)
+            for key in openai_keys
+        ]
+        # FreeLLMAPI is the runtime default; avoid constructing an OpenAI client
+        # with empty credentials when paid OpenAI access is intentionally disabled.
+        self.client = self._openai_clients[0] if self._openai_clients else self._freellmapi_client
         self._openrouter_clients = [
-            AsyncOpenAI(api_key=key, base_url="https://openrouter.ai/api/v1", max_retries=0, timeout=settings.ai_request_timeout_s)
+            AsyncOpenAI(
+                api_key=key,
+                base_url="https://openrouter.ai/api/v1",
+                max_retries=0,
+                timeout=settings.ai_request_timeout_s,
+            )
             for key in openrouter_keys
         ]
         self.openrouter = self._openrouter_clients[0] if self._openrouter_clients else None
-        self._freellmapi_client = AsyncOpenAI(api_key=freellmapi_key or "missing", base_url=settings.freellmapi_base_url, max_retries=0, timeout=settings.ai_request_timeout_s)
         self._provider_cooldowns: dict[str, float] = {}
         self._key_cooldowns: dict[tuple[str, int], float] = {}
         self._provider_next_index: dict[str, int] = {}
