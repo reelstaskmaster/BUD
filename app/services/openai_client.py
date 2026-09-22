@@ -115,23 +115,24 @@ class OpenAIService:
             raise ValueError("Empty audio payload")
         buf = BytesIO(audio)
         buf.name = filename
-        response = await self.client.audio.transcriptions.create(
-            model=self.settings.stt_model,
-            file=(filename, buf, _audio_content_type(filename)),
-        )
+        try:
+            response = await self._freellmapi_client.audio.transcriptions.create(
+                model=self.settings.freellmapi_stt_model,
+                file=(filename, buf, _audio_content_type(filename)),
+            )
+        except Exception as exc:
+            raise _provider_error("FreeLLMAPI transcription", exc) from exc
         return (response.text or "").strip()
 
     async def embed(self, text: str) -> list[float]:
         cleaned = text.strip() or "empty"
         try:
-            response = await self.client.embeddings.create(
-                model=self.settings.embedding_model,
+            response = await self._freellmapi_client.embeddings.create(
+                model=self.settings.freellmapi_embedding_model,
                 input=cleaned,
             )
-        except RateLimitError as exc:
-            if _is_insufficient_quota(exc):
-                raise OpenAIQuotaError("OpenAI API quota is exhausted") from exc
-            raise
+        except Exception as exc:
+            raise _provider_error("FreeLLMAPI embeddings", exc) from exc
         return list(response.data[0].embedding)
 
     async def generate_image(
@@ -140,241 +141,81 @@ class OpenAIService:
         *,
         reference_image: tuple[bytes, str] | None = None,
     ) -> bytes:
-        """Generate or edit an image, preferring the configured OpenRouter image API."""
-        openrouter_keys = self._real_api_keys("openrouter")
-        last_error: Exception | None = None
-        if not openrouter_keys:
-            return await self._generate_image_fallbacks(prompt, reference_image=reference_image)
-
-        start_index = self._next_key_index("openrouter", len(openrouter_keys))
-        candidates = [
-            ((start_index + offset) % len(openrouter_keys), openrouter_keys[(start_index + offset) % len(openrouter_keys)])
-            for offset in range(len(openrouter_keys))
-            if not self._key_is_cooling("openrouter", (start_index + offset) % len(openrouter_keys))
-        ]
-
-        for index, api_key in candidates:
-            try:
-                # Keep the request to the portable core of the Images API.
-                # Optional controls vary by model endpoint and can cause 400s.
-                payload: dict[str, Any] = {
-                    "model": self.settings.openrouter_image_model,
-                    "prompt": prompt,
-                }
-                if reference_image:
-                    image_bytes, mime_type = reference_image
-                    encoded = base64.b64encode(image_bytes).decode("ascii")
-                    payload["input_references"] = [{
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
-                    }]
-
-                async with httpx.AsyncClient(timeout=120) as http:
-                    response = await http.post(
-                        "https://openrouter.ai/api/v1/images",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json=payload,
-                    )
-                if response.status_code >= 400:
-                    detail = response.text[:500].replace("\n", " ")
-                    last_error = AIProviderError(
-                        f"OpenRouter image generation failed ({response.status_code}): {detail}"
-                    )
-                    logger.warning("OpenRouter image request failed: %s", last_error)
-                    if response.status_code in {401, 402, 403, 408, 429, 500, 502, 503, 504, 524, 529}:
-                        self._cool_down_key("openrouter", index, 60.0)
-                    continue
-
-                data = response.json()
-                items = data.get("data") or []
-                if not items:
-                    raise AIProviderError("OpenRouter image generation returned no image data")
-                b64 = items[0].get("b64_json")
-                if not b64:
-                    raise AIProviderError("OpenRouter image generation returned no base64 image")
-                try:
-                    return base64.b64decode(b64, validate=True)
-                except (ValueError, binascii.Error) as exc:
-                    raise AIProviderError("OpenRouter image generation returned invalid base64") from exc
-            except httpx.HTTPStatusError as exc:
-                last_error = AIProviderError(
-                    f"OpenRouter image generation failed ({exc.response.status_code})"
-                )
-            except (httpx.RequestError, httpx.TimeoutException):
-                last_error = AIProviderError("OpenRouter image generation network error")
-                self._cool_down_key("openrouter", index, 30.0)
-            except AIProviderError as exc:
-                last_error = exc
-
-        return await self._generate_image_fallbacks(
-            prompt,
-            reference_image=reference_image,
-            last_error=last_error,
-        )
-
-    async def _generate_image_fallbacks(
-        self,
-        prompt: str,
-        *,
-        reference_image: tuple[bytes, str] | None = None,
-        last_error: Exception | None = None,
-    ) -> bytes:
-        gemini_keys = self._real_api_keys("gemini")
-        if gemini_keys:
-            start_index = self._next_key_index("gemini", len(gemini_keys))
-            for offset in range(len(gemini_keys)):
-                index = (start_index + offset) % len(gemini_keys)
-                if self._key_is_cooling("gemini", index):
-                    continue
-                try:
-                    return await self._generate_image_gemini(
-                        prompt,
-                        gemini_keys[index],
-                        reference_image=reference_image,
-                    )
-                except Exception as exc:
-                    last_error = AIProviderError(f"Gemini image generation failed: {exc}")
-                    self._cool_down_key("gemini", index, 30.0)
-                    logger.warning("Gemini image key %d failed; trying next fallback", index + 1)
-
-        try:
-            return await self._generate_image_openai(prompt, reference_image=reference_image)
-        except Exception as exc:
-            last_error = exc
-            logger.exception("All image providers failed")
-        raise last_error or AIProviderError("Image generation unavailable")
-
-    async def _generate_image_gemini(
-        self,
-        prompt: str,
-        api_key: str,
-        *,
-        reference_image: tuple[bytes, str] | None = None,
-    ) -> bytes:
-        inputs: list[dict[str, Any]] = []
-        if reference_image:
-            image_bytes, mime_type = reference_image
-            inputs.append({
-                "type": "image",
-                "mime_type": mime_type,
-                "data": base64.b64encode(image_bytes).decode("ascii"),
-            })
-        inputs.append({"type": "text", "text": prompt})
-        payload = {
-            "model": self.settings.gemini_image_model,
-            "input": inputs,
-            "response_format": {"type": "image", "mime_type": "image/png"},
+        """Generate an image only through FreeLLMAPI; never fall back to paid providers."""
+        payload: dict[str, Any] = {
+            "model": self.settings.freellmapi_image_model,
+            "prompt": prompt,
         }
-        async with httpx.AsyncClient(timeout=120) as http:
-            response = await http.post(
-                "https://generativelanguage.googleapis.com/v1beta/interactions",
-                headers={
-                    "x-goog-api-key": api_key,
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-        if response.status_code >= 400:
-            raise AIProviderError(f"Gemini image generation unavailable ({response.status_code})")
-        data = response.json()
-        output_image = data.get("output_image") or {}
-        b64 = output_image.get("data")
-        if not b64:
-            for step in data.get("steps") or []:
-                for block in step.get("content") or []:
-                    if block.get("type") == "image" and block.get("data"):
-                        b64 = block["data"]
-                        break
-                if b64:
-                    break
-        if not b64:
-            raise AIProviderError("Gemini image generation returned no image data")
-        try:
-            return base64.b64decode(b64, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise AIProviderError("Gemini image generation returned invalid base64") from exc
-
-    async def _generate_image_openai(
-        self,
-        prompt: str,
-        *,
-        reference_image: tuple[bytes, str] | None = None,
-    ) -> bytes:
         if reference_image:
             image_bytes, mime_type = reference_image
-            filename = "reference.png" if mime_type == "image/png" else "reference.jpg"
-            response = await self.client.images.edit(
-                model=self.settings.image_model,
-                image=(filename, BytesIO(image_bytes), mime_type),
-                prompt=prompt,
-            )
-        else:
-            response = await self.client.images.generate(
-                model=self.settings.image_model,
-                prompt=prompt,
-                size="1024x1024",
-                n=1,
-            )
-        item = response.data[0]
-        b64 = getattr(item, "b64_json", None)
-        if b64:
-            return base64.b64decode(b64)
-        url = getattr(item, "url", None)
-        if url:
-            async with httpx.AsyncClient(timeout=60) as http:
-                downloaded = await http.get(url)
-                downloaded.raise_for_status()
-                return downloaded.content
-        raise RuntimeError("OpenAI image API returned neither b64 nor url")
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            payload["input_references"] = [{
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+            }]
+
+        url = f"{self.settings.freellmapi_base_url.rstrip('/')}/images/generations"
+        try:
+            async with httpx.AsyncClient(timeout=120) as http:
+                response = await http.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self.settings.freellmapi_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+            if response.status_code >= 400:
+                detail = response.text[:500].replace("\n", " ")
+                raise AIProviderError(
+                    f"FreeLLMAPI image generation unavailable ({response.status_code}): {detail}"
+                )
+            data = response.json()
+            items = data.get("data") or []
+            if not items:
+                raise AIProviderError("FreeLLMAPI image generation returned no image data")
+            b64 = items[0].get("b64_json")
+            if not b64:
+                raise AIProviderError("FreeLLMAPI image generation returned no base64 image")
+            return base64.b64decode(b64, validate=True)
+        except (httpx.RequestError, httpx.TimeoutException) as exc:
+            raise AIProviderError("FreeLLMAPI image generation network error") from exc
+        except (ValueError, binascii.Error) as exc:
+            raise AIProviderError("FreeLLMAPI image generation returned invalid base64") from exc
 
     async def summarize(self, transcript: str) -> str:
-        response = await self.client.responses.create(
-            model=self.settings.extract_model,
-            instructions="Summarize this chat excerpt in 5-8 concise sentences. Keep names, decisions, open questions, and durable context. Write in the same language as the excerpt.",
-            input=transcript[:20000],
+        response = await self._freellmapi_client.chat.completions.create(
+            model=self.settings.freellmapi_chat_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Summarize this chat excerpt in 5-8 concise sentences. Keep names, decisions, open questions, and durable context. Write in the same language as the excerpt.",
+                },
+                {"role": "user", "content": transcript[:20000]},
+            ],
         )
-        return (response.output_text or "").strip()
+        return (response.choices[0].message.content or "").strip()
 
     async def extract_facts(self, turn_text: str) -> list[dict[str, str]]:
-        response = await self.client.responses.create(
-            model=self.settings.extract_model,
-            instructions="Extract durable facts worth remembering from this conversation turn: people, names, interests, preferences, places, agreements. Skip small talk and one-off requests. If nothing durable, return an empty list.",
-            input=turn_text[:12000],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "extracted_facts",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "items": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "content": {"type": "string"},
-                                        "category": {"type": "string", "enum": ["person", "interest", "preference", "name", "other"]},
-                                        "action": {"type": "string", "enum": ["add", "forget"]},
-                                    },
-                                    "required": ["content", "category", "action"],
-                                    "additionalProperties": False,
-                                },
-                            }
-                        },
-                        "required": ["items"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
+        response = await self._freellmapi_client.chat.completions.create(
+            model=self.settings.freellmapi_chat_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract durable facts worth remembering. Return ONLY valid JSON with an items array. "
+                        "Each item must have content, category (person, interest, preference, name, other), "
+                        "and action (add or forget). Skip small talk and one-off requests. "
+                        "Return an empty items array when nothing durable exists."
+                    ),
+                },
+                {"role": "user", "content": turn_text[:12000]},
+            ],
         )
         try:
-            payload = json.loads(response.output_text or '{"items":[]}')
+            payload = json.loads(response.choices[0].message.content or '{"items":[]}')
         except json.JSONDecodeError:
-            logger.warning("Fact extraction returned non-JSON")
+            logger.warning("FreeLLMAPI fact extraction returned non-JSON")
             return []
         return [item for item in payload.get("items", []) if isinstance(item, dict)]
 
