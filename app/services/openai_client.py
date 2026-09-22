@@ -109,6 +109,7 @@ class OpenAIService:
                 api_key=settings.openrouter_api_key,
                 base_url="https://openrouter.ai/api/v1",
                 max_retries=0,
+                timeout=settings.ai_request_timeout_s,
             )
             if settings.openrouter_api_key
             else None
@@ -233,7 +234,8 @@ class OpenAIService:
             if provider == "gemini" and self.settings.gemini_api_key:
                 try:
                     logger.info("AI provider: gemini")
-                    result = await self._chat_gemini(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=gemini latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
+                    result = await self._chat_gemini(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=gemini latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -241,7 +243,8 @@ class OpenAIService:
             elif provider == "freellmapi" and self.freellmapi:
                 try:
                     logger.info("AI provider: freellmapi")
-                    result = await self._chat_freellmapi(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=freellmapi latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
+                    result = await self._chat_freellmapi(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=freellmapi latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -253,7 +256,8 @@ class OpenAIService:
             elif provider == "openrouter" and self.openrouter:
                 try:
                     logger.info("AI provider: openrouter")
-                    result = await self._chat_openrouter(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=openrouter latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
+                    result = await self._chat_openrouter(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=openrouter latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -261,7 +265,8 @@ class OpenAIService:
             elif provider == "openai" and self.settings.openai_api_key:
                 try:
                     logger.info("AI provider: openai")
-                    result = await self._chat_openai(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=openai latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
+                    result = await self._chat_openai(instructions, messages, tool_handler)
+                    logger.info("AI request %s completed provider=openai latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except OpenAIQuotaError as exc:
                     last_error = exc
                     self._cool_down(provider, 300.0)
@@ -331,7 +336,7 @@ class OpenAIService:
         history.extend(_to_chat_message(message) for message in messages)
         image_bytes: bytes | None = None
         image_prompt: str | None = None
-        for _ in range(8):
+        for _ in range(self.settings.ai_max_tool_rounds):
             try:
                 response = await self.freellmapi.chat.completions.create(
                     model=self.settings.freellmapi_chat_model,
@@ -362,7 +367,7 @@ class OpenAIService:
         history.extend(_to_chat_message(message) for message in messages)
         image_bytes: bytes | None = None
         image_prompt: str | None = None
-        for _ in range(8):
+        for _ in range(self.settings.ai_max_tool_rounds):
             try:
                 response = await self.openrouter.chat.completions.create(
                     model=self.settings.openrouter_chat_model,
@@ -388,7 +393,7 @@ class OpenAIService:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.settings.gemini_chat_model}:generateContent"
         headers = {"x-goog-api-key": self.settings.gemini_api_key}
         async with httpx.AsyncClient(timeout=60) as http:
-            for _ in range(8):
+            for _ in range(self.settings.ai_max_tool_rounds):
                 payload = {"systemInstruction": {"parts": [{"text": instructions}]}, "contents": contents, "tools": tools}
                 try:
                     response = await http.post(url, headers=headers, json=payload)
