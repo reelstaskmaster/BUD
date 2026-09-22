@@ -92,13 +92,14 @@ class OpenAIInputMessage:
 class OpenAIService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0, timeout=settings.ai_request_timeout_s)
         self._provider_cooldowns: dict[str, float] = {}
         self.freellmapi = (
             AsyncOpenAI(
                 api_key=settings.freellmapi_api_key,
                 base_url=settings.freellmapi_base_url,
                 max_retries=0,
+                timeout=settings.ai_request_timeout_s,
             )
             if settings.freellmapi_api_key
             else None
