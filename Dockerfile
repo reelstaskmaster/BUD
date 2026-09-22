@@ -1,13 +1,5 @@
-FROM python:3.12-slim-bookworm
-
-WORKDIR /app
-
-COPY pyproject.toml requirements.txt alembic.ini ./
-COPY app ./app
-COPY alembic ./alembic
-COPY docker/entrypoint.sh /entrypoint.sh
-
-RUN pip install --no-cache-dir -e . \
-    && chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
+FROM ghcr.io/tashfeenahmed/freellmapi:latest
+USER root
+COPY freellmapi-entrypoint.sh /usr/local/bin/freellmapi-railway-entrypoint.sh
+RUN chmod +x /usr/local/bin/freellmapi-railway-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/freellmapi-railway-entrypoint.sh"]
