@@ -93,6 +93,15 @@ class OpenAIService:
         self.settings = settings
         self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
         self._provider_cooldowns: dict[str, float] = {}
+        self.freellmapi = (
+            AsyncOpenAI(
+                api_key=settings.freellmapi_api_key,
+                base_url=settings.freellmapi_base_url,
+                max_retries=0,
+            )
+            if settings.freellmapi_api_key
+            else None
+        )
         self.openrouter = (
             AsyncOpenAI(
                 api_key=settings.openrouter_api_key,
@@ -223,6 +232,18 @@ class OpenAIService:
                     last_error = exc
                     self._cool_down(provider)
                     logger.warning("Gemini unavailable; falling back: %s", exc)
+            elif provider == "freellmapi" and self.freellmapi:
+                try:
+                    logger.info("AI provider: freellmapi")
+                    return await self._chat_freellmapi(instructions, messages, tool_handler)
+                except AIProviderError as exc:
+                    last_error = exc
+                    self._cool_down(provider)
+                    logger.warning("FreeLLMAPI unavailable; falling back: %s", exc)
+                except RateLimitError as exc:
+                    last_error = exc
+                    self._cool_down(provider)
+                    logger.warning("FreeLLMAPI rate limited; falling back")
             elif provider == "openrouter" and self.openrouter:
                 try:
                     logger.info("AI provider: openrouter")
@@ -290,6 +311,42 @@ class OpenAIService:
                 tool_output, image_bytes, image_prompt = await self._run_tool(call.name, call.arguments, tool_handler, image_bytes, image_prompt)
                 outputs.append({"type": "function_call_output", "call_id": call.call_id, "output": tool_output})
             current_input = outputs
+        return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
+
+    async def _chat_freellmapi(
+        self,
+        instructions: str,
+        messages: list[OpenAIInputMessage],
+        tool_handler: ToolHandler,
+    ) -> ChatResult:
+        if not self.freellmapi:
+            raise AIProviderError("FreeLLMAPI API key is missing")
+        history: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
+        history.extend(_to_chat_message(message) for message in messages)
+        image_bytes: bytes | None = None
+        image_prompt: str | None = None
+        for _ in range(8):
+            try:
+                response = await self.freellmapi.chat.completions.create(
+                    model=self.settings.freellmapi_chat_model,
+                    messages=history,
+                    tools=[_to_openai_chat_tool(tool) for tool in CHAT_TOOLS],
+                )
+            except Exception as exc:
+                raise _provider_error("FreeLLMAPI", exc) from exc
+            choice = response.choices[0].message
+            if not choice.tool_calls:
+                return ChatResult((choice.content or "").strip(), image_bytes, "image/png" if image_bytes else None, image_prompt)
+            history.append(choice.model_dump(exclude_none=True))
+            for call in choice.tool_calls:
+                tool_output, image_bytes, image_prompt = await self._run_tool(
+                    call.function.name,
+                    call.function.arguments,
+                    tool_handler,
+                    image_bytes,
+                    image_prompt,
+                )
+                history.append({"role": "tool", "tool_call_id": call.id, "content": tool_output})
         return ChatResult("I could not finish the tool loop. Please try again.", image_bytes, "image/png" if image_bytes else None, image_prompt)
 
     async def _chat_openrouter(self, instructions: str, messages: list[OpenAIInputMessage], tool_handler: ToolHandler) -> ChatResult:
