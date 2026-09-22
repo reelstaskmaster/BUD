@@ -156,7 +156,45 @@ class OpenAIService:
         *,
         reference_image: tuple[bytes, str] | None = None,
     ) -> bytes:
-        """Generate an image only through FreeLLMAPI; never fall back to paid providers."""
+        """Try FreeLLMAPI first, then paid Gemini image generation."""
+        try:
+            return await self._generate_image_freellmapi(prompt, reference_image=reference_image)
+        except Exception as free_exc:
+            gemini_keys = self._real_api_keys("gemini")
+            if not gemini_keys:
+                raise
+            last_error: Exception = free_exc
+            for index, key in enumerate(gemini_keys):
+                if self._key_is_cooling("gemini", index):
+                    continue
+                try:
+                    logger.warning(
+                        "FreeLLMAPI image generation failed; trying paid Gemini key %d/%d",
+                        index + 1,
+                        len(gemini_keys),
+                    )
+                    result = await self._generate_image_gemini(
+                        prompt,
+                        api_key=key,
+                        reference_image=reference_image,
+                    )
+                    return result
+                except Exception as exc:
+                    last_error = exc
+                    self._cool_down_key("gemini", index)
+                    logger.warning(
+                        "Gemini image key %d/%d failed; trying next image provider key",
+                        index + 1,
+                        len(gemini_keys),
+                    )
+            raise AIProviderError("All image generation providers failed") from last_error
+
+    async def _generate_image_freellmapi(
+        self,
+        prompt: str,
+        *,
+        reference_image: tuple[bytes, str] | None = None,
+    ) -> bytes:
         payload: dict[str, Any] = {
             "model": self.settings.freellmapi_image_model,
             "prompt": prompt,
@@ -197,6 +235,59 @@ class OpenAIService:
             raise AIProviderError("FreeLLMAPI image generation network error") from exc
         except (ValueError, binascii.Error) as exc:
             raise AIProviderError("FreeLLMAPI image generation returned invalid base64") from exc
+
+    async def _generate_image_gemini(
+        self,
+        prompt: str,
+        *,
+        api_key: str,
+        reference_image: tuple[bytes, str] | None = None,
+    ) -> bytes:
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        if reference_image:
+            image_bytes, mime_type = reference_image
+            parts.append({
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                }
+            })
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"responseModalities": ["IMAGE"]},
+        }
+        url = (
+            "https://generativelanguage.googleapis.com/v1/models/"
+            f"{self.settings.gemini_image_model}:generateContent"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=180) as http:
+                response = await http.post(
+                    url,
+                    headers={
+                        "x-goog-api-key": api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+            if response.status_code >= 400:
+                detail = response.text[:500].replace("\n", " ")
+                raise AIProviderError(
+                    f"Gemini image generation unavailable ({response.status_code}): {detail}"
+                )
+            data = response.json()
+            candidates = data.get("candidates") or []
+            parts_out = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+            for part in parts_out:
+                inline = part.get("inlineData") or part.get("inline_data") or {}
+                b64 = inline.get("data")
+                if b64:
+                    return base64.b64decode(b64, validate=True)
+            raise AIProviderError("Gemini image generation returned no image data")
+        except (httpx.RequestError, httpx.TimeoutException) as exc:
+            raise AIProviderError("Gemini image generation network error") from exc
+        except (ValueError, binascii.Error) as exc:
+            raise AIProviderError("Gemini image generation returned invalid base64") from exc
 
     async def summarize(self, transcript: str) -> str:
         response = await self._freellmapi_client.chat.completions.create(
