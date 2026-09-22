@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -227,12 +228,29 @@ class OpenAIService:
                 {"role": "user", "content": turn_text[:12000]},
             ],
         )
-        try:
-            payload = json.loads(response.choices[0].message.content or '{"items":[]}')
-        except json.JSONDecodeError:
+        raw = (response.choices[0].message.content or "").strip()
+        payload = _parse_fact_payload(raw)
+        if payload is None:
             logger.warning("FreeLLMAPI fact extraction returned non-JSON")
             return []
-        return [item for item in payload.get("items", []) if isinstance(item, dict)]
+        items = payload if isinstance(payload, list) else payload.get("items", [])
+        if not isinstance(items, list):
+            return []
+        normalized: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            category = str(item.get("category") or "other")
+            action = str(item.get("action") or "add").lower()
+            if category not in {"person", "interest", "preference", "name", "other"}:
+                category = "other"
+            if action not in {"add", "forget"}:
+                action = "add"
+            normalized.append({"content": content, "category": category, "action": action})
+        return normalized
 
     async def chat(
         self,
@@ -605,6 +623,33 @@ class OpenAIService:
                 return "Image generation failed. Tell the user it did not work.", image_bytes, image_prompt
         return await tool_handler(name, args), image_bytes, image_prompt
 
+
+def _parse_fact_payload(raw: str) -> dict[str, Any] | list[Any] | None:
+    """Parse JSON from models that sometimes wrap it in markdown or prose."""
+    if not raw:
+        return {"items": []}
+    candidates = [raw.strip()]
+    fence = chr(96) + chr(96) + chr(96)
+    fenced = re.sub(r"^" + fence + r"(?:json)?\s*|\s*" + fence + r"$", "", raw.strip(), flags=re.IGNORECASE)
+    if fenced != raw.strip():
+        candidates.append(fenced.strip())
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, (dict, list)):
+                return payload
+        except json.JSONDecodeError:
+            pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            payload = json.loads(raw[start : end + 1])
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+    return None
 
 def _latest_reference_image(
     messages: list[OpenAIInputMessage],
