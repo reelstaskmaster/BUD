@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import time
+from uuid import uuid4
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -149,7 +150,7 @@ class OpenAIService:
             return base64.b64decode(b64)
         url = getattr(item, "url", None)
         if url:
-            async with httpx.AsyncClient(timeout=60) as http:
+            async with httpx.AsyncClient(timeout=self.settings.ai_request_timeout_s) as http:
                 downloaded = await http.get(url)
                 downloaded.raise_for_status()
                 return downloaded.content
@@ -209,7 +210,11 @@ class OpenAIService:
         instructions: str,
         messages: list[OpenAIInputMessage],
         tool_handler: ToolHandler,
+        request_id: str | None = None,
     ) -> ChatResult:
+        request_id = request_id or uuid4().hex[:12]
+        started = time.monotonic()
+        logger.info("AI request %s started providers=%s", request_id, self.settings.ai_providers)
         # Keep existing unit-test doubles and legacy callers on the original OpenAI path.
         if not hasattr(self.settings, "ai_providers"):
             return await self._chat_openai(instructions, messages, tool_handler)
@@ -227,7 +232,7 @@ class OpenAIService:
             if provider == "gemini" and self.settings.gemini_api_key:
                 try:
                     logger.info("AI provider: gemini")
-                    return await self._chat_gemini(instructions, messages, tool_handler)
+                    result = await self._chat_gemini(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=gemini latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -235,7 +240,7 @@ class OpenAIService:
             elif provider == "freellmapi" and self.freellmapi:
                 try:
                     logger.info("AI provider: freellmapi")
-                    return await self._chat_freellmapi(instructions, messages, tool_handler)
+                    result = await self._chat_freellmapi(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=freellmapi latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -247,7 +252,7 @@ class OpenAIService:
             elif provider == "openrouter" and self.openrouter:
                 try:
                     logger.info("AI provider: openrouter")
-                    return await self._chat_openrouter(instructions, messages, tool_handler)
+                    result = await self._chat_openrouter(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=openrouter latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except AIProviderError as exc:
                     last_error = exc
                     self._cool_down(provider)
@@ -255,7 +260,7 @@ class OpenAIService:
             elif provider == "openai" and self.settings.openai_api_key:
                 try:
                     logger.info("AI provider: openai")
-                    return await self._chat_openai(instructions, messages, tool_handler)
+                    result = await self._chat_openai(instructions, messages, tool_handler)\n                    logger.info("AI request %s completed provider=openai latency_ms=%d", request_id, int((time.monotonic()-started)*1000))\n                    return result
                 except OpenAIQuotaError as exc:
                     last_error = exc
                     self._cool_down(provider, 300.0)
@@ -286,7 +291,7 @@ class OpenAIService:
         image_prompt: str | None = None
         previous_response_id: str | None = None
         current_input: Any = openai_input
-        for _ in range(8):
+        for _ in range(self.settings.ai_max_tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": self.settings.chat_model,
                 "instructions": instructions,
