@@ -8,7 +8,7 @@ def test_default_runtime_bounds() -> None:
     settings = Settings(telegram_bot_token="token", openai_api_key="key")
     assert settings.recent_messages == 16
     assert settings.coalesce_debounce_s == 0.7
-    assert settings.ai_providers == ["freellmapi"]
+    assert settings.ai_providers == ["freellmapi", "gemini"]
     assert settings.embedding_dims == 2048
     assert settings.embedding_model == "llama-nemotron-embed-vl-1b-v2"
 
