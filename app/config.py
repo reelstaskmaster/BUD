@@ -11,11 +11,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
     openrouter_api_key: str = ""
+    freellmapi_api_key: str = ""
+    freellmapi_base_url: str = "http://localhost:3001/v1"
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
-    ai_chain: str = "gemini,openrouter,openai"
+    ai_chain: str = "gemini,freellmapi,openrouter,openai"
     gemini_chat_model: str = "gemini-3.8-flash"
     openrouter_chat_model: str = "openrouter/free"
+    freellmapi_chat_model: str = "auto"
 
     chat_model: str = "gpt-4.1"
     extract_model: str = "gpt-4.1-mini"
