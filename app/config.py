@@ -22,11 +22,14 @@ class Settings(BaseSettings):
     freellmapi_api_key: str = ""
     freellmapi_base_url: str = "http://localhost:3001/v1"
     freellmapi_chat_model: str = "auto"
+    freellmapi_embedding_model: str = "llama-nemotron-embed-vl-1b-v2"
+    freellmapi_stt_model: str = "auto"
+    freellmapi_image_model: str = "auto"
     ai_request_timeout_s: float = Field(default=60.0, gt=1, le=300)
     ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
-    ai_chain: str = "freellmapi,openrouter,openai"
+    ai_chain: str = "freellmapi"
     gemini_chat_model: str = "gemini-3.8-flash"
     openrouter_chat_model: str = "openrouter/free"
     openrouter_image_model: str = "google/gemini-3.1-flash-image"
@@ -34,16 +37,16 @@ class Settings(BaseSettings):
 
     chat_model: str = "gpt-4.1"
     extract_model: str = "gpt-4.1-mini"
-    embedding_model: str = "text-embedding-3-small"
-    stt_model: str = "whisper-1"
-    image_model: str = "gpt-image-2"
+    embedding_model: str = "llama-nemotron-embed-vl-1b-v2"
+    stt_model: str = "auto"
+    image_model: str = "auto"
 
     recent_messages: int = Field(default=16, ge=1, le=200)
     fact_top_k: int = Field(default=10, ge=1, le=100)
     fact_all_threshold: int = Field(default=30, ge=0, le=1000)
     summarize_every: int = Field(default=20, ge=1, le=1000)
     coalesce_debounce_ms: int = Field(default=700, ge=0, le=60_000)
-    embedding_dims: int = Field(default=1536, gt=0, le=8192)
+    embedding_dims: int = Field(default=2048, gt=0, le=8192)
 
     @property
     def coalesce_debounce_s(self) -> float:
