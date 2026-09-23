@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from app.services.openai_client import ChatResult
+from app.services.planner import Planner
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,9 @@ class AgentLoop:
         "провести аудит", "сделай полностью",
     )
 
+    def __init__(self) -> None:
+        self.planner = Planner()
+
     def decide(self, query: str) -> AgentDecision:
         normalized = query.casefold()
         complex_task = any(marker in normalized for marker in self._COMPLEX_MARKERS)
@@ -37,8 +41,10 @@ class AgentLoop:
         decision = self.decide(query)
         if decision.mode == "fast":
             return instructions
+        plan = self.planner.build(query)
         return (
             f"{instructions}\n\n"
+            f"{self.planner.render(plan)}\n\n"
             "Autonomous task contract:\n"
             "- Work toward the user's actual goal, not an adjacent task.\n"
             "- Decide the next useful action from the available capabilities.\n"
