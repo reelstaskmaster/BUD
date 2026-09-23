@@ -98,9 +98,24 @@ class RuntimeCapabilities:
 
         url = f"https://api.github.com/repos/{repository}/contents/{path.lstrip('/')}"
         payload: dict[str, Any] = {"message": message, "content": base64.b64encode(content.encode("utf-8")).decode("ascii"), "branch": branch}
+        headers = self._github_headers()
+
+        if not sha:
+            try:
+                async with httpx.AsyncClient(timeout=self.settings.capability_timeout_s) as http:
+                    current = await http.get(url, headers=headers, params={"ref": branch})
+                if current.status_code == 200:
+                    sha = str(current.json().get("sha") or "")
+                elif current.status_code in {401, 403}:
+                    return "GitHub write access denied. Configure GITHUB_TOKEN with repository write permission."
+                elif current.status_code != 404:
+                    return f"GitHub file lookup failed with HTTP {current.status_code}."
+            except httpx.TimeoutException:
+                return "GitHub file lookup timed out."
+            except httpx.RequestError:
+                return "GitHub file lookup failed due to a network error."
         if sha:
             payload["sha"] = sha
-        headers = self._github_headers()
 
         try:
             async with httpx.AsyncClient(timeout=self.settings.capability_timeout_s) as http:
