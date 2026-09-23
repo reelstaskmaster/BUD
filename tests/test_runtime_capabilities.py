@@ -23,7 +23,9 @@ async def test_github_read_file_returns_text(monkeypatch) -> None:
     result = await RuntimeCapabilities(FakeSettings()).github_read_file(
         {"repository": "reelstaskmaster/BUD", "path": "README.md"}
     )
-    assert "repository=reelstaskmaster/BUD" in result\n    assert "path=README.md" in result\n    assert "print('ok')" in result
+    assert "repository=reelstaskmaster/BUD" in result
+    assert "path=README.md" in result
+    assert "print('ok')" in result
 
 
 @pytest.mark.asyncio
