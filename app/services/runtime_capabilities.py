@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import httpx
@@ -70,6 +71,8 @@ class RuntimeCapabilities:
             return "GitHub branch creation timed out."
         except httpx.RequestError:
             return "GitHub branch creation failed due to a network error."
+        except httpx.HTTPStatusError as exc:
+            return f"GitHub base ref lookup failed with HTTP {exc.response.status_code}."
 
         if response.status_code == 422:
             return "GitHub branch creation failed: branch may already exist or base ref is invalid."
