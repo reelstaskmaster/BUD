@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.db import repositories as repo
 from app.db.models import Message
+from app.services.agent_loop import AgentLoop
 from app.services.memory import MemoryService
 from app.services.openai_client import ChatResult, OpenAIInputMessage, OpenAIService
 from app.services.prompt import build_instructions
@@ -29,6 +30,7 @@ class ReplyPipeline:
         self.openai = openai
         self.memory = memory
         self.settings = settings
+        self.agent_loop = AgentLoop()
 
     async def process_batch(self, chat_id: int, batch: list[Message]) -> ChatResult:
         query = "\n".join(message.content for message in batch if message.content)
@@ -63,10 +65,17 @@ class ReplyPipeline:
             async def handle_tool(name: str, args: dict) -> str:
                 return await self.memory.tool_handler(session, chat_id, name, args)
 
-            return await self.openai.chat(
+            async def execute(runtime_instructions: str) -> ChatResult:
+                return await self.openai.chat(
+                    instructions=runtime_instructions,
+                    messages=openai_messages,
+                    tool_handler=handle_tool,
+                )
+
+            return await self.agent_loop.run(
+                query=query,
                 instructions=instructions,
-                messages=openai_messages,
-                tool_handler=handle_tool,
+                executor=execute,
             )
 
     async def _download_file(self, file_id: str) -> tuple[bytes, str | None]:
