@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.db.models import Fact, Summary
+from app.services.prompt_engine import PromptEngine
 
 
 SYSTEM_PROMPT = """You are a helpful Telegram assistant.
@@ -24,7 +25,11 @@ When they ask to forget something, call forget_fact.
 
 If the user sent several messages before you reply, answer all of them in one
 coherent reply. Match the user's language. Keep replies concise unless they
-ask for depth. Do not mention tools, embeddings, or the transcription pipeline."""
+ask for depth. Do not mention tools, embeddings, or the transcription pipeline.
+
+For complex tasks, reason from the user's actual goal, constraints, available
+context, and a concrete definition of done. Do not manufacture missing
+requirements; ask only when the missing information materially blocks the task."""
 
 
 @dataclass
@@ -33,13 +38,19 @@ class MemoryContext:
     summaries: list[Summary]
 
 
-def build_instructions(memory: MemoryContext) -> str:
+def build_instructions(memory: MemoryContext, query: str = "") -> str:
     parts = [SYSTEM_PROMPT]
+
+    if query.strip():
+        parts.append(PromptEngine().render(query))
+
     if memory.facts:
         lines = [f"- [{fact.category}] {fact.content}" for fact in memory.facts]
         parts.append("Known facts about this user:\n" + "\n".join(lines))
+
     if memory.summaries:
         blocks = [summary.content for summary in memory.summaries if summary.content]
         if blocks:
             parts.append("Earlier conversation summaries:\n" + "\n\n".join(blocks))
+
     return "\n\n".join(parts)
