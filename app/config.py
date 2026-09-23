@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     image_model: str = "auto"
 
     recent_messages: int = Field(default=16, ge=1, le=200)
+    context_max_chars: int = Field(default=24_000, ge=2_000, le=100_000)
     fact_top_k: int = Field(default=10, ge=1, le=100)
     fact_all_threshold: int = Field(default=30, ge=0, le=1000)
     summarize_every: int = Field(default=20, ge=1, le=1000)
