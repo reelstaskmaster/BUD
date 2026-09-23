@@ -66,6 +66,18 @@ class AgentLoop:
         result = await executor(runtime_instructions)
         if decision.mode == "fast":
             return result
+
         if result.text.strip():
             return result
+
+        # One bounded retry: keep the loop autonomous without creating
+        # unbounded model calls or latency.
+        retry_instructions = (
+            f"{runtime_instructions}\n\n"
+            "Previous execution produced no usable result. Re-plan the task, "
+            "choose a safe alternative, and verify the outcome before replying."
+        )
+        retry = await executor(retry_instructions)
+        if retry.text.strip():
+            return retry
         return ChatResult("Не удалось подтвердить завершение задачи. Попробуйте ещё раз.")
