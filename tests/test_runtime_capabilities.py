@@ -1,3 +1,4 @@
+import pytest
 import httpx
 
 from app.services.runtime_capabilities import RuntimeCapabilities
@@ -9,6 +10,7 @@ class FakeSettings:
     webhook_base_url = "https://example.test"
 
 
+@pytest.mark.asyncio
 async def test_github_read_file_returns_text(monkeypatch) -> None:
     class Response:
         status_code = 200
@@ -24,6 +26,7 @@ async def test_github_read_file_returns_text(monkeypatch) -> None:
     assert result == "print('ok')"
 
 
+@pytest.mark.asyncio
 async def test_railway_health_reports_status(monkeypatch) -> None:
     class Response:
         status_code = 200
