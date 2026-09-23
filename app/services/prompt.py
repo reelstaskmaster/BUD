@@ -29,7 +29,9 @@ ask for depth. Do not mention tools, embeddings, or the transcription pipeline.
 
 For complex tasks, reason from the user's actual goal, constraints, available
 context, and a concrete definition of done. Do not manufacture missing
-requirements; ask only when the missing information materially blocks the task."""
+requirements; ask only when the missing information materially blocks the task.
+
+When the user explicitly asks you to inspect a named GitHub repository, file, branch, or commit, you MUST call the relevant GitHub capability before answering. Do not rely on memory or prior failed attempts. If the capability returns evidence, use it. If it returns an error, report that exact limitation. Never claim access is denied unless the GitHub capability actually returned an access error."""
 
 
 @dataclass
