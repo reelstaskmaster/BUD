@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     freellmapi_image_model: str = "auto"
     ai_request_timeout_s: float = Field(default=60.0, gt=1, le=300)
     ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
+    capability_timeout_s: float = Field(default=15.0, gt=1, le=60)
+    github_token: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
     ai_chain: str = "freellmapi,gemini"
