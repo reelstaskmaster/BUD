@@ -3,22 +3,25 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.openai_client import OpenAIService
+from app.services.openai_client import AIProviderError, OpenAIService
 
 
 class FakeResponse:
-    status_code = 200
-
-    def raise_for_status(self) -> None:
-        return None
+    def __init__(self, status_code: int = 200, data: dict | None = None) -> None:
+        self.status_code = status_code
+        self._data = data or {
+            "data": [{"b64_json": base64.b64encode(b"generated-image").decode("ascii")}]
+        }
+        self.text = '{"error":"test"}'
 
     def json(self) -> dict:
-        return {"data": [{"b64_json": base64.b64encode(b"generated-image").decode("ascii")}]}
+        return self._data
 
 
 class FakeClient:
-    def __init__(self) -> None:
-        self.payload = None
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.responses = responses
+        self.calls: list[dict] = []
 
     async def __aenter__(self):
         return self
@@ -26,23 +29,30 @@ class FakeClient:
     async def __aexit__(self, *_args):
         return None
 
-    async def post(self, _url, *, headers, json):
-        self.payload = json
-        assert headers["Authorization"].startswith("Bearer ")
-        return FakeResponse()
+    async def post(self, url, *, headers, json):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        return self.responses.pop(0)
+
+
+def _settings(**overrides):
+    values = {
+        "freellmapi_api_key": "freellmapi-key",
+        "freellmapi_base_url": "http://freellmapi/v1",
+        "freellmapi_image_model": "auto",
+        "gemini_api_key_pool": [],
+        "gemini_api_key": "",
+        "gemini_image_model": "gemini-3.1-flash-image",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 @pytest.mark.asyncio
-async def test_openrouter_image_generation_sends_reference_image(monkeypatch) -> None:
+async def test_freellmapi_image_generation_sends_reference_image(monkeypatch) -> None:
     service = object.__new__(OpenAIService)
-    service.settings = SimpleNamespace(
-        openrouter_api_key_pool=["key-1"],
-        openrouter_api_key="",
-        openrouter_image_model="google/gemini-3.1-flash-image",
-    )
-    service._key_cooldowns = {}
+    service.settings = _settings()
 
-    fake_client = FakeClient()
+    fake_client = FakeClient([FakeResponse()])
     monkeypatch.setattr(
         "app.services.openai_client.httpx.AsyncClient",
         lambda **_kwargs: fake_client,
@@ -54,10 +64,10 @@ async def test_openrouter_image_generation_sends_reference_image(monkeypatch) ->
     )
 
     assert result == b"generated-image"
-    assert fake_client.payload["model"] == "google/gemini-3.1-flash-image"
-    assert "n" not in fake_client.payload
-    assert "resolution" not in fake_client.payload
-    reference = fake_client.payload["input_references"][0]
+    call = fake_client.calls[0]
+    assert call["url"] == "http://freellmapi/v1/images/generations"
+    assert call["headers"]["Authorization"] == "Bearer freellmapi-key"
+    reference = call["json"]["input_references"][0]
     assert reference["type"] == "image_url"
     assert reference["image_url"]["url"] == (
         "data:image/jpeg;base64,"
@@ -66,101 +76,72 @@ async def test_openrouter_image_generation_sends_reference_image(monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_openrouter_image_generation_works_without_reference(monkeypatch) -> None:
+async def test_freellmapi_image_generation_rejects_invalid_base64(monkeypatch) -> None:
     service = object.__new__(OpenAIService)
-    service.settings = SimpleNamespace(
-        openrouter_api_key_pool=["key-1"],
-        openrouter_api_key="",
-        openrouter_image_model="google/gemini-3.1-flash-image",
-    )
-    service._key_cooldowns = {}
+    service.settings = _settings()
 
-    fake_client = FakeClient()
+    fake_client = FakeClient(
+        [FakeResponse(data={"data": [{"b64_json": "not-valid-base64!!!"}]})]
+    )
     monkeypatch.setattr(
         "app.services.openai_client.httpx.AsyncClient",
         lambda **_kwargs: fake_client,
     )
 
-    result = await service.generate_image("A cinematic beach at sunset.")
-
-    assert result == b"generated-image"
-    assert "input_references" not in fake_client.payload
-
-
-class BadBase64Response(FakeResponse):
-    def json(self) -> dict:
-        return {"data": [{"b64_json": "not-valid-base64!!!"}]}
-
-
-@pytest.mark.asyncio
-async def test_openrouter_image_generation_rejects_invalid_base64(monkeypatch) -> None:
-    service = object.__new__(OpenAIService)
-    service.settings = SimpleNamespace(
-        openrouter_api_key_pool=["key-1"],
-        openrouter_api_key="",
-        openrouter_image_model="google/gemini-3.1-flash-image",
-    )
-    service._key_cooldowns = {}
-
-    fake_client = FakeClient()
-    monkeypatch.setattr(
-        "app.services.openai_client.httpx.AsyncClient",
-        lambda **_kwargs: fake_client,
-    )
-    fake_client.post = AsyncBadBase64Post().__call__
-
-    with pytest.raises(Exception, match="invalid base64"):
+    with pytest.raises(AIProviderError, match="invalid base64"):
         await service.generate_image("test")
 
 
-class AsyncBadBase64Post:
-    async def __call__(self, _url, *, headers, json):
-        return BadBase64Response()
-
-
-class FakeGeminiResponse:
-    status_code = 200
-
-    def json(self) -> dict:
-        return {
-            "output_image": {
-                "data": base64.b64encode(b"gemini-image").decode("ascii")
-            }
-        }
-
-
 class FakeGeminiClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *_args):
         return None
 
-    async def post(self, _url, *, headers, json):
-        assert headers["x-goog-api-key"] == "gemini-key"
-        assert json["model"] == "gemini-3.1-flash-image"
-        return FakeGeminiResponse()
+    async def post(self, url, *, headers, json):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        if url.endswith("/images/generations"):
+            return FakeResponse(status_code=502)
+        return FakeResponse(
+            data={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": base64.b64encode(b"gemini-image").decode("ascii"),
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
 
 
 @pytest.mark.asyncio
 async def test_image_generation_falls_back_to_gemini(monkeypatch) -> None:
     service = object.__new__(OpenAIService)
-    service.settings = SimpleNamespace(
-        openrouter_api_key_pool=[],
-        openrouter_api_key="",
-        gemini_api_key_pool=["gemini-key"],
-        gemini_api_key="",
-        gemini_image_model="gemini-3.1-flash-image",
-        image_model="gpt-image-1",
-    )
+    service.settings = _settings(gemini_api_key_pool=["gemini-key"])
     service._key_cooldowns = {}
-    service._provider_next_index = {}
 
+    fake_client = FakeGeminiClient()
     monkeypatch.setattr(
         "app.services.openai_client.httpx.AsyncClient",
-        lambda **_kwargs: FakeGeminiClient(),
+        lambda **_kwargs: fake_client,
     )
 
     result = await service.generate_image("A beach at sunset.")
 
     assert result == b"gemini-image"
+    assert len(fake_client.calls) == 2
+    assert fake_client.calls[0]["url"].endswith("/images/generations")
+    assert fake_client.calls[1]["headers"]["x-goog-api-key"] == "gemini-key"
+    assert fake_client.calls[1]["json"]["generationConfig"]["responseModalities"] == ["IMAGE"]

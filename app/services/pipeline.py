@@ -33,7 +33,7 @@ class ReplyPipeline:
     async def process_batch(self, chat_id: int, batch: list[Message]) -> ChatResult:
         query = "\n".join(message.content for message in batch if message.content)
         memory = await self.memory.retrieve(chat_id, query)
-        instructions = build_instructions(memory)
+        instructions = build_instructions(memory, query=query)
 
         async with self.session_factory() as session:
             recent = await repo.list_recent_messages(
