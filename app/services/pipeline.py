@@ -40,6 +40,9 @@ class ReplyPipeline:
         self.capability_executor = CapabilityExecutor(self.capabilities)
         runtime = RuntimeCapabilities(settings)
         self.capabilities.register(Capability("github_read_file", "Read a text file from GitHub. Read-only.", RiskLevel.READ, runtime.github_read_file))
+        self.capabilities.register(Capability("github_create_branch", "Create a GitHub branch from a base ref.", RiskLevel.WRITE, runtime.github_create_branch))
+        self.capabilities.register(Capability("github_update_file", "Create or update a GitHub text file on a branch.", RiskLevel.WRITE, runtime.github_update_file))
+        self.capabilities.register(Capability("github_create_pr", "Create a draft GitHub pull request. Never merges it.", RiskLevel.WRITE, runtime.github_create_pr))
         self.capabilities.register(Capability("railway_health", "Check the BUD/Railway HTTP health endpoint. Read-only.", RiskLevel.READ, runtime.railway_health))
 
     async def process_batch(self, chat_id: int, batch: list[Message]) -> ChatResult:
