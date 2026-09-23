@@ -60,6 +60,37 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "github_read_file",
+        "description": "Read a text file from a GitHub repository. Use for inspecting code or documentation; read-only.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "path": {"type": "string", "description": "Repository file path."},
+                "ref": {"type": "string", "description": "Branch, tag, or commit; defaults to main."},
+            },
+            "required": ["repository", "path"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "railway_health",
+        "description": "Check a BUD/Railway HTTP health endpoint. Read-only.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Optional base URL; defaults to the configured BUD webhook URL."},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+
+    {
+        "type": "function",
         "name": "generate_image",
         "description": "Generate an image from a text prompt and send it to the user. Call this when the user asks to draw, generate, or create a picture.",
         "parameters": {

@@ -14,6 +14,9 @@ from app.services.context_manager import ContextManager
 from app.services.memory import MemoryService
 from app.services.openai_client import ChatResult, OpenAIInputMessage, OpenAIService
 from app.services.prompt import build_instructions
+from app.services.capability_executor import CapabilityExecutor
+from app.services.capability_registry import Capability, CapabilityRegistry, RiskLevel
+from app.services.runtime_capabilities import RuntimeCapabilities
 
 
 class ReplyPipeline:
@@ -33,6 +36,11 @@ class ReplyPipeline:
         self.settings = settings
         self.agent_loop = AgentLoop()
         self.context_manager = ContextManager(settings.context_max_chars)
+        self.capabilities = CapabilityRegistry()
+        self.capability_executor = CapabilityExecutor(self.capabilities)
+        runtime = RuntimeCapabilities(settings)
+        self.capabilities.register(Capability("github_read_file", "Read a text file from GitHub. Read-only.", RiskLevel.READ, runtime.github_read_file))
+        self.capabilities.register(Capability("railway_health", "Check the BUD/Railway HTTP health endpoint. Read-only.", RiskLevel.READ, runtime.railway_health))
 
     async def process_batch(self, chat_id: int, batch: list[Message]) -> ChatResult:
         query = "\n".join(message.content for message in batch if message.content)
@@ -68,6 +76,10 @@ class ReplyPipeline:
         async with self.session_factory() as session:
 
             async def handle_tool(name: str, args: dict) -> str:
+                capability = self.capabilities.get(name)
+                if capability is not None:
+                    result = await self.capability_executor.run(name, args)
+                    return result.output
                 return await self.memory.tool_handler(session, chat_id, name, args)
 
             async def execute(runtime_instructions: str) -> ChatResult:
