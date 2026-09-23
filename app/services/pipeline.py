@@ -10,6 +10,7 @@ from app.config import Settings
 from app.db import repositories as repo
 from app.db.models import Message
 from app.services.agent_loop import AgentLoop
+from app.services.context_manager import ContextManager
 from app.services.memory import MemoryService
 from app.services.openai_client import ChatResult, OpenAIInputMessage, OpenAIService
 from app.services.prompt import build_instructions
@@ -31,6 +32,7 @@ class ReplyPipeline:
         self.memory = memory
         self.settings = settings
         self.agent_loop = AgentLoop()
+        self.context_manager = ContextManager(settings.context_max_chars)
 
     async def process_batch(self, chat_id: int, batch: list[Message]) -> ChatResult:
         query = "\n".join(message.content for message in batch if message.content)
@@ -59,6 +61,9 @@ class ReplyPipeline:
                     image_mime_type=resolved_mime_type,
                 )
             )
+
+        openai_messages = self.context_manager.trim_messages(openai_messages)
+        instructions = self.context_manager.trim_instructions(instructions)
 
         async with self.session_factory() as session:
 
