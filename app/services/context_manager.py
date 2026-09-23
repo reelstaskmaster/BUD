@@ -34,4 +34,5 @@ class ContextManager:
     def trim_instructions(self, instructions: str) -> str:
         if len(instructions) <= self.max_chars:
             return instructions
-        return instructions[: self.max_chars].rstrip() + "\n[Context trimmed]"
+        suffix = "\n[Context trimmed]"
+        return instructions[: self.max_chars - len(suffix)].rstrip() + suffix
