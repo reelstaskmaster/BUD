@@ -76,6 +76,59 @@ CHAT_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "github_create_branch",
+        "description": "Create a new GitHub branch from a base ref. Use before making code changes; never use main as the write target.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "branch": {"type": "string", "description": "New branch name."},
+                "base_ref": {"type": "string", "description": "Existing branch, tag, or commit; defaults to main."}
+            },
+            "required": ["repository", "branch"],
+            "additionalProperties": False
+        },
+        "strict": True
+    },
+    {
+        "type": "function",
+        "name": "github_update_file",
+        "description": "Create or update a text file on a GitHub branch. For existing files, provide the current blob SHA from github_read_file metadata when available.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "path": {"type": "string", "description": "Repository file path."},
+                "branch": {"type": "string", "description": "Target feature branch; do not write directly to main."},
+                "content": {"type": "string", "description": "Complete UTF-8 file contents."},
+                "message": {"type": "string", "description": "Commit message."},
+                "sha": {"type": "string", "description": "Current blob SHA for an existing file; omit for a new file."}
+            },
+            "required": ["repository", "path", "branch", "content", "message"],
+            "additionalProperties": False
+        },
+        "strict": True
+    },
+    {
+        "type": "function",
+        "name": "github_create_pr",
+        "description": "Create a draft GitHub pull request from a feature branch to a base branch. This does not merge the PR.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "head": {"type": "string", "description": "Feature branch containing the changes."},
+                "base": {"type": "string", "description": "Base branch, defaults to main."},
+                "title": {"type": "string", "description": "Pull request title."},
+                "body": {"type": "string", "description": "Pull request description."}
+            },
+            "required": ["repository", "head", "title"],
+            "additionalProperties": False
+        },
+        "strict": True
+    },
+    {
+        "type": "function",
         "name": "railway_health",
         "description": "Check a BUD/Railway HTTP health endpoint. Read-only.",
         "parameters": {
