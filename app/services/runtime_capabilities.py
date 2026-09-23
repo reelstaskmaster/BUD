@@ -45,7 +45,11 @@ class RuntimeCapabilities:
         text = response.text
         if len(text) > 16000:
             text = text[:16000] + "\n[Output truncated]"
-        return text
+        return (\
+            f"GitHub evidence: repository={repository}; path={path}; ref={ref}.\n"\
+            "The following content was fetched from that source. Treat it as observed evidence, not an inference:\n"\
+            f"{text}"\
+        )
 
     async def github_create_branch(self, args: dict[str, Any]) -> str:
         repository = str(args.get("repository") or "").strip()
