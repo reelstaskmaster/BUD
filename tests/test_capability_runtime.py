@@ -1,4 +1,6 @@
-import pytest\n\nfrom app.services.capability_executor import CapabilityExecutor
+import pytest
+
+from app.services.capability_executor import CapabilityExecutor
 from app.services.capability_registry import Capability, CapabilityRegistry, RiskLevel
 
 
