@@ -14,12 +14,12 @@ class AgentDecision:
 
 
 class AgentLoop:
-    """Small autonomous orchestration layer.
+    """Bounded autonomous orchestration.
 
-    Simple requests keep the existing one-call fast path. Complex requests get
-    an explicit goal/definition-of-done contract; no extra LLM planner call is
-    made. Future capabilities can plug into the executor without changing the
-    fast path.
+    Fast requests keep the one-call path. Complex tasks run through three
+    explicit phases: execute, verify, and finalize. Each phase is another
+    model/tool turn, so external state can be inspected again after actions.
+    The loop is bounded to prevent runaway tool use and cost.
     """
 
     _COMPLEX_MARKERS = (
@@ -54,6 +54,39 @@ class AgentLoop:
             "- Do not claim actions or results that were not actually performed."
         )
 
+    def _phase_instructions(
+        self,
+        base: str,
+        phase: int,
+        previous: str,
+    ) -> str:
+        phase_text = {
+            1: (
+                "AGENT PHASE 1 — EXECUTE. Inspect the relevant state and capabilities, "
+                "then perform the smallest useful action toward the goal. Use tools when "
+                "they provide real evidence or are required to act. Do not stop at a plan."
+            ),
+            2: (
+                "AGENT PHASE 2 — VERIFY. Independently verify the real external state "
+                "against the goal and acceptance criteria. Prefer read-only evidence. "
+                "If phase 1 failed or the result is incomplete, re-plan and take one "
+                "safe corrective action. Never repeat a completed write or create a "
+                "duplicate PR/branch just to appear active."
+            ),
+            3: (
+                "AGENT PHASE 3 — FINALIZE. Perform a final evidence check. If the goal "
+                "is not yet satisfied, take the minimum safe corrective action and "
+                "verify it. If it is satisfied, stop acting and report only what was "
+                "actually observed or executed. Do not invent success."
+            ),
+        }[phase]
+        prior = previous[-6000:] if previous else "No previous phase output."
+        return (
+            f"{base}\n\n{phase_text}\n"
+            "Previous phase output (may be incomplete; do not treat it as proof):\n"
+            f"{prior}"
+        )
+
     async def run(
         self,
         *,
@@ -62,22 +95,20 @@ class AgentLoop:
         executor: Callable[[str], Awaitable[ChatResult]],
     ) -> ChatResult:
         decision = self.decide(query)
-        runtime_instructions = self.augment_instructions(instructions, query)
-        result = await executor(runtime_instructions)
         if decision.mode == "fast":
-            return result
+            return await executor(instructions)
 
-        if result.text.strip():
-            return result
+        base = self.augment_instructions(instructions, query)
+        last_result: ChatResult | None = None
+        previous = ""
 
-        # One bounded retry: keep the loop autonomous without creating
-        # unbounded model calls or latency.
-        retry_instructions = (
-            f"{runtime_instructions}\n\n"
-            "Previous execution produced no usable result. Re-plan the task, "
-            "choose a safe alternative, and verify the outcome before replying."
+        for phase in range(1, decision.max_iterations + 1):
+            result = await executor(self._phase_instructions(base, phase, previous))
+            last_result = result
+            previous = result.text
+
+        if last_result is not None and last_result.text.strip():
+            return last_result
+        return ChatResult(
+            "Не удалось подтвердить завершение задачи после ограниченного цикла агента."
         )
-        retry = await executor(retry_instructions)
-        if retry.text.strip():
-            return retry
-        return ChatResult("Не удалось подтвердить завершение задачи. Попробуйте ещё раз.")
