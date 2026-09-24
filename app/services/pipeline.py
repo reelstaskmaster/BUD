@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import re
 from io import BytesIO
 
 from aiogram import Bot
@@ -50,6 +51,12 @@ class ReplyPipeline:
         memory = await self.memory.retrieve(chat_id, query)
         instructions = build_instructions(memory, query=query)
 
+        # Deterministic preflight: explicit GitHub inspection requests must fetch
+        # the requested source before the LLM is allowed to answer from inference.
+        github_evidence = await self._github_preflight(query)
+        if github_evidence:
+            instructions += "\n\n" + github_evidence
+
         async with self.session_factory() as session:
             recent = await repo.list_recent_messages(
                 session, chat_id, self.settings.recent_messages
@@ -97,6 +104,25 @@ class ReplyPipeline:
                 instructions=instructions,
                 executor=execute,
             )
+
+    async def _github_preflight(self, query: str) -> str:
+        if not re.search(r"github|репозитор|readme|\.py\b|\.md\b", query, re.IGNORECASE):
+            return ""
+        repository_match = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\b", query)
+        path_match = re.search(r"(?:`|\b)([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:py|md|txt|json|ya?ml|toml))(?:`|\b)", query)
+        if not repository_match or not path_match:
+            return ""
+        repository = repository_match.group(1)
+        path = path_match.group(1)
+        result = await self.capability_executor.run(
+            "github_read_file",
+            {"repository": repository, "path": path, "ref": "main"},
+        )
+        return (
+            "Verified GitHub evidence was fetched before answering. "
+            "Use this evidence as the source of truth for the requested inspection:\n"
+            + result.output
+        )
 
     async def _download_file(self, file_id: str) -> tuple[bytes, str | None]:
         file = await self.bot.get_file(file_id)
