@@ -139,7 +139,34 @@ class RuntimeCapabilities:
             return f"GitHub file update failed with HTTP {response.status_code}."
         data = response.json()
         commit_sha = ((data.get("commit") or {}).get("sha") or "")
-        return f"Updated {path} on {branch}. Commit: {commit_sha or 'created'}"
+
+        # Verify the write by reading the file back from the target branch.
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.capability_timeout_s) as http:
+                verified = await http.get(url, headers=headers, params={"ref": branch})
+        except httpx.TimeoutException:
+            return f"Updated {path} on {branch}, but verification timed out. Commit: {commit_sha or 'created'}"
+        except httpx.RequestError:
+            return f"Updated {path} on {branch}, but verification failed due to a network error. Commit: {commit_sha or 'created'}"
+
+        if verified.status_code != 200:
+            return f"Updated {path} on {branch}, but verification returned HTTP {verified.status_code}. Commit: {commit_sha or 'created'}"
+
+        verified_payload = verified.json()
+        verified_content = verified_payload.get("content")
+        verified_encoding = verified_payload.get("encoding")
+        if verified_encoding != "base64" or not verified_content:
+            return f"Updated {path} on {branch}, but verification returned no file content. Commit: {commit_sha or 'created'}"
+
+        try:
+            observed = base64.b64decode(verified_content.replace("\\n", ""), validate=False).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return f"Updated {path} on {branch}, but verification returned unreadable content. Commit: {commit_sha or 'created'}"
+
+        if observed != content:
+            return f"Updated {path} on {branch}, but verification detected content mismatch. Commit: {commit_sha or 'created'}"
+
+        return f"Updated {path} on {branch}. Verified content matches. Commit: {commit_sha or 'created'}"
 
     async def github_create_pr(self, args: dict[str, Any]) -> str:
         repository = str(args.get("repository") or "").strip()
