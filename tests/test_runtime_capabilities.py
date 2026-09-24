@@ -73,16 +73,30 @@ async def test_github_create_branch(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_github_update_file(monkeypatch) -> None:
-    class Response:
+    class PutResponse:
         status_code = 200
         def json(self):
             return {"commit": {"sha": "commit-sha"}}
 
+    class VerifyResponse:
+        status_code = 200
+        def json(self):
+            import base64
+            return {
+                "encoding": "base64",
+                "content": base64.b64encode(b"updated").decode("ascii"),
+            }
+
     async def fake_put(self, *args, **kwargs):
         assert kwargs["json"]["sha"] == "blob-sha"
-        return Response()
+        return PutResponse()
+
+    async def fake_get(self, *args, **kwargs):
+        assert kwargs["params"]["ref"] == "agent/test"
+        return VerifyResponse()
 
     monkeypatch.setattr(httpx.AsyncClient, "put", fake_put)
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
     result = await RuntimeCapabilities(WriteSettings()).github_update_file(
         {
             "repository": "reelstaskmaster/BUD",
@@ -93,7 +107,7 @@ async def test_github_update_file(monkeypatch) -> None:
             "sha": "blob-sha",
         }
     )
-    assert "Updated README.md on agent/test." in result
+    assert "Verified content matches" in result
 
 
 @pytest.mark.asyncio
