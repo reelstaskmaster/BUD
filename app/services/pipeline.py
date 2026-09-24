@@ -108,8 +108,8 @@ class ReplyPipeline:
     async def _github_preflight(self, query: str) -> str:
         if not re.search(r"github|репозитор|readme|\.py\b|\.md\b", query, re.IGNORECASE):
             return ""
-        repository_match = re.search(r"\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\b", query)
-        path_match = re.search(r"(?:\`|\\b)([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\\.(?:py|md|txt|json|ya?ml|toml))(?:\`|\\b)", query)
+        repository_match = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\b", query)
+        path_match = re.search(r"(?:`|\b)([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:py|md|txt|json|ya?ml|toml))(?:`|\b)", query)
         if not repository_match or not path_match:
             return ""
         repository = repository_match.group(1)
