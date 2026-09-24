@@ -11,7 +11,7 @@ async def test_complex_task_retries_when_first_execution_has_no_result() -> None
     async def execute(_: str) -> ChatResult:
         nonlocal calls
         calls += 1
-        return ChatResult("") if calls == 1 else ChatResult("verified")
+        return ChatResult("") if calls == 1 else ChatResult("verified AGENT_STATUS: DONE")
 
     result = await AgentLoop().run(
         query="fix the issue",
