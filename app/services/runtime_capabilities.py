@@ -36,19 +36,34 @@ class RuntimeCapabilities:
             return "GitHub read failed due to a network error."
 
         if response.status_code == 404:
-            return "GitHub file not found or repository is not accessible."
+            # GitHub deliberately collapses some authorization failures into 404.
+            # Probe the repository itself so the agent can distinguish a missing
+            # file from an inaccessible repository when the repository is visible.
+            repo_url = f"https://api.github.com/repos/{repository}"
+            try:
+                async with httpx.AsyncClient(timeout=self.settings.capability_timeout_s) as http:
+                    repo_response = await http.get(repo_url, headers=headers)
+            except httpx.TimeoutException:
+                return f"GitHub file lookup returned 404 for {path}; repository access could not be verified."
+            except httpx.RequestError:
+                return f"GitHub file lookup returned 404 for {path}; repository access check failed due to a network error."
+            if repo_response.status_code == 200:
+                return f"GitHub file not found: {repository}/{path} on ref {ref}."
+            if repo_response.status_code in {401, 403, 404}:
+                return "GitHub repository is not accessible with the configured credentials."
+            return f"GitHub repository access check failed with HTTP {repo_response.status_code}."
         if response.status_code in {401, 403}:
-            return "GitHub access denied. Configure GITHUB_TOKEN for private repositories."
+            return "GitHub access denied. Configure GITHUB_TOKEN for the requested repository."
         if response.status_code >= 400:
             return f"GitHub read failed with HTTP {response.status_code}."
 
         text = response.text
         if len(text) > 16000:
             text = text[:16000] + "\n[Output truncated]"
-        return (\
-            f"GitHub evidence: repository={repository}; path={path}; ref={ref}.\n"\
-            "The following content was fetched from that source. Treat it as observed evidence, not an inference:\n"\
-            f"{text}"\
+        return (
+            f"GitHub evidence: repository={repository}; path={path}; ref={ref}.\n"
+            "The following content was fetched from that source. Treat it as observed evidence, not an inference:\n"
+            f"{text}"
         )
 
     async def github_create_branch(self, args: dict[str, Any]) -> str:
@@ -140,7 +155,6 @@ class RuntimeCapabilities:
         data = response.json()
         commit_sha = ((data.get("commit") or {}).get("sha") or "")
 
-        # Verify the write by reading the file back from the target branch.
         try:
             async with httpx.AsyncClient(timeout=self.settings.capability_timeout_s) as http:
                 verified = await http.get(url, headers=headers, params={"ref": branch})
