@@ -1,5 +1,7 @@
-import pytest
+import base64
+
 import httpx
+import pytest
 
 from app.services.runtime_capabilities import RuntimeCapabilities
 
@@ -29,6 +31,44 @@ async def test_github_read_file_returns_text(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_github_read_file_distinguishes_missing_file(monkeypatch) -> None:
+    class FileResponse:
+        status_code = 404
+        text = '{"message":"Not Found"}'
+
+    class RepoResponse:
+        status_code = 200
+        text = '{"name":"BUD"}'
+
+    responses = [FileResponse(), RepoResponse()]
+
+    async def fake_get(self, *args, **kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    result = await RuntimeCapabilities(FakeSettings()).github_read_file(
+        {"repository": "reelstaskmaster/BUD", "path": "README.md"}
+    )
+    assert result == "GitHub file not found: reelstaskmaster/BUD/README.md on ref main."
+
+
+@pytest.mark.asyncio
+async def test_github_read_file_reports_inaccessible_repo(monkeypatch) -> None:
+    class Response:
+        status_code = 404
+        text = '{"message":"Not Found"}'
+
+    async def fake_get(self, *args, **kwargs):
+        return Response()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    result = await RuntimeCapabilities(FakeSettings()).github_read_file(
+        {"repository": "missing-owner/missing-repo", "path": "app/main.py"}
+    )
+    assert result == "GitHub repository is not accessible with the configured credentials."
+
+
+@pytest.mark.asyncio
 async def test_railway_health_reports_status(monkeypatch) -> None:
     class Response:
         status_code = 200
@@ -50,6 +90,7 @@ class WriteSettings(FakeSettings):
 async def test_github_create_branch(monkeypatch) -> None:
     class Response:
         status_code = 200
+
         def json(self):
             return {"object": {"sha": "base-sha"}}
 
@@ -75,13 +116,14 @@ async def test_github_create_branch(monkeypatch) -> None:
 async def test_github_update_file(monkeypatch) -> None:
     class PutResponse:
         status_code = 200
+
         def json(self):
             return {"commit": {"sha": "commit-sha"}}
 
     class VerifyResponse:
         status_code = 200
+
         def json(self):
-            import base64
             return {
                 "encoding": "base64",
                 "content": base64.b64encode(b"updated").decode("ascii"),
@@ -114,6 +156,7 @@ async def test_github_update_file(monkeypatch) -> None:
 async def test_github_create_pr_creates_draft(monkeypatch) -> None:
     class Response:
         status_code = 201
+
         def json(self):
             return {"number": 7, "html_url": "https://github.com/reelstaskmaster/BUD/pull/7"}
 
