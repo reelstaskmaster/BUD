@@ -71,11 +71,11 @@ def build_instructions(memory: MemoryContext, query: str = "") -> str:
 
     if memory.facts:
         lines = [f"- [{fact.category}] {fact.content}" for fact in memory.facts]
-        parts.append("Known facts about this user:\\n" + "\\n".join(lines))
+        parts.append("Known facts about this user:\n" + "\n".join(lines))
 
     if memory.summaries:
         blocks = [summary.content for summary in memory.summaries if summary.content]
         if blocks:
-            parts.append("Earlier conversation summaries:\\n" + "\\n\\n".join(blocks))
+            parts.append("Earlier conversation summaries:\n" + "\n\n".join(blocks))
 
-    return "\\n\\n".join(parts)
+    return "\n\n".join(parts)
