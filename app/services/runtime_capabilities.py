@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -13,6 +16,106 @@ class RuntimeCapabilities:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
+    async def web_fetch(self, args: dict[str, Any]) -> str:
+        """Fetch public web content while blocking obvious SSRF targets."""
+        url = str(args.get("url") or "").strip()
+        if not url:
+            return "web_fetch requires a URL."
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return "web_fetch accepts only absolute http:// or https:// URLs."
+        if parsed.username or parsed.password:
+            return "web_fetch rejects URLs containing embedded credentials."
+        if parsed.port and parsed.port not in {80, 443}:
+            return "web_fetch allows only standard HTTP/HTTPS ports."
+
+        host = parsed.hostname.rstrip(".").lower()
+        if host in {"localhost", "localhost.localdomain", "ip6-localhost"} or host.endswith(".localhost"):
+            return "web_fetch blocked a local hostname."
+
+        try:
+            infos = await __import__("asyncio").to_thread(
+                socket.getaddrinfo, host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM
+            )
+        except socket.gaierror:
+            return "web_fetch could not resolve the hostname."
+        except Exception:
+            return "web_fetch hostname resolution failed."
+
+        addresses = {info[4][0] for info in infos}
+        for address in addresses:
+            try:
+                ip = ipaddress.ip_address(address)
+            except ValueError:
+                continue
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return "web_fetch blocked a non-public network address."
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.settings.capability_timeout_s,
+                follow_redirects=False,
+                headers={"User-Agent": "BUD-Agent/1.0"},
+            ) as http:
+                response = await http.get(url)
+        except httpx.TimeoutException:
+            return "Web fetch timed out."
+        except httpx.RequestError:
+            return "Web fetch failed due to a network error."
+
+        if 300 <= response.status_code < 400:
+            return "Web fetch blocked a redirect; fetch the final public URL explicitly."
+        if response.status_code >= 400:
+            return f"Web fetch failed with HTTP {response.status_code}."
+
+        text = response.text
+        if len(text) > 20000:
+            text = text[:20000] + "\n[Output truncated]"
+        return (
+            f"Web evidence: {url}\n"
+            "The following content was fetched from that public source. Treat it as observed evidence, not an inference:\n"
+            f"{text}"
+        )
+
+    async def github_list_directory(self, args: dict[str, Any]) -> str:
+        repository = str(args.get("repository") or "").strip()
+        path = str(args.get("path") or "").strip()
+        ref = str(args.get("ref") or "main").strip()
+        if not repository:
+            return "github_list_directory requires repository."
+        if "/" not in repository:
+            return "repository must use owner/name format."
+
+        url = f"https://api.github.com/repos/{repository}/contents/{path.lstrip('/')}"
+        headers = self._github_headers()
+        headers["Accept"] = "application/vnd.github.object+json"
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.capability_timeout_s) as http:
+                response = await http.get(url, headers=headers, params={"ref": ref})
+        except httpx.TimeoutException:
+            return "GitHub directory listing timed out."
+        except httpx.RequestError:
+            return "GitHub directory listing failed due to a network error."
+
+        if response.status_code in {401, 403}:
+            return "GitHub access denied. Configure GITHUB_TOKEN for the requested repository."
+        if response.status_code == 404:
+            return f"GitHub path not found or inaccessible: {repository}/{path or '[root]'} on ref {ref}."
+        if response.status_code >= 400:
+            return f"GitHub directory listing failed with HTTP {response.status_code}."
+
+        data = response.json()
+        entries = data.get("entries") if isinstance(data, dict) else data
+        if not isinstance(entries, list):
+            return f"GitHub path is not a directory: {repository}/{path} on ref {ref}."
+        lines = []
+        for entry in entries[:200]:
+            lines.append(f"{entry.get('type', 'unknown')}: {entry.get('path', '')}")
+        return (
+            f"GitHub directory evidence: repository={repository}; path={path or '[root]'}; ref={ref}.\n"
+            + "\n".join(lines)
+        )
 
     async def github_read_file(self, args: dict[str, Any]) -> str:
         repository = str(args.get("repository") or "").strip()
