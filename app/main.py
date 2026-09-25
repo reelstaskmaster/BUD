@@ -1,14 +1,15 @@
-"""Telegram GPT bot with memory and message coalescing.
+'''Telegram GPT bot with memory and message coalescing.
 
 Setup:
   cp .env.example .env
   docker compose up -d --build
-"""
+'''
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 
 from aiohttp import web
 from aiogram import Bot
@@ -24,8 +25,6 @@ from app.services.openai_client import OpenAIService
 from app.services.pipeline import ReplyPipeline
 
 logger = logging.getLogger(__name__)
-
-
 async def run() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -62,6 +61,22 @@ async def run() -> None:
         openai=openai,
     )
 
+    # Event to signal graceful shutdown
+    stop_event = asyncio.Event()
+
+    def signal_handler():
+        # Set the event to trigger shutdown when a signal is received
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    try:
+        # Register signal handlers for graceful shutdown
+        loop.add_signal_handler(signal.SIGINT, signal_handler)
+        loop.add_signal_handler(signal.SIGTERM, signal_handler)
+    except NotImplementedError:
+        # Signal handling may not be supported on all platforms (e.g., Windows)
+        pass
+
     try:
         await coalescer.recover_pending()
 
@@ -95,7 +110,8 @@ async def run() -> None:
                     secret_token=settings.webhook_secret,
                 )
                 logger.info("Starting webhook on %s", webhook_url)
-                await asyncio.Event().wait()
+                # Wait for stop event instead of a permanent block
+                await stop_event.wait()
             finally:
                 await runner.cleanup()
         else:
@@ -103,14 +119,11 @@ async def run() -> None:
             logger.info("Starting polling")
             await dp.start_polling(bot)
     finally:
+        # Cleanup resources on exit
         await coalescer.shutdown()
         await bot.session.close()
         await engine.dispose()
-
-
 def main() -> None:
     asyncio.run(run())
-
-
 if __name__ == "__main__":
     main()
