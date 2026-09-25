@@ -40,6 +40,8 @@ class ReplyPipeline:
         self.capabilities = CapabilityRegistry()
         self.capability_executor = CapabilityExecutor(self.capabilities)
         runtime = RuntimeCapabilities(settings)
+        self.capabilities.register(Capability("web_fetch", "Fetch public internet content. Read-only.", RiskLevel.READ, runtime.web_fetch))
+        self.capabilities.register(Capability("github_list_directory", "List a GitHub repository directory. Read-only.", RiskLevel.READ, runtime.github_list_directory))
         self.capabilities.register(Capability("github_read_file", "Read a text file from GitHub. Read-only.", RiskLevel.READ, runtime.github_read_file))
         self.capabilities.register(Capability("github_create_branch", "Create a GitHub branch from a base ref.", RiskLevel.WRITE, runtime.github_create_branch))
         self.capabilities.register(Capability("github_update_file", "Create or update a GitHub text file on a branch.", RiskLevel.WRITE, runtime.github_update_file))
