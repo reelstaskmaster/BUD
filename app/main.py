@@ -75,7 +75,7 @@ async def run() -> None:
         loop.add_signal_handler(signal.SIGTERM, signal_handler)
     except NotImplementedError:
         # Signal handling may not be supported on all platforms (e.g., Windows)
-        pass
+        logger.warning("Signal handling not supported on this platform")
 
     try:
         await coalescer.recover_pending()
