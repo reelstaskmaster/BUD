@@ -311,7 +311,15 @@ class RuntimeCapabilities:
             return "GitHub pull request creation failed due to a network error."
 
         if response.status_code in {401, 403}:
-            return "GitHub write access denied. Configure GITHUB_TOKEN with repository write permission."
+            detail = ""
+            try:
+                payload_error = response.json()
+                detail = str(payload_error.get("message") or "").strip()
+            except ValueError:
+                detail = ""
+            if detail:
+                return f"GitHub pull request creation denied (HTTP {response.status_code}): {detail}"
+            return f"GitHub pull request creation denied (HTTP {response.status_code})."
         if response.status_code == 422:
             return "GitHub pull request creation rejected; check branch names and whether a PR already exists."
         if response.status_code >= 400:
