@@ -19,4 +19,4 @@ async def test_complex_task_retries_when_first_execution_has_no_result() -> None
         executor=execute,
     )
     assert result.text == "verified"
-    assert calls == 2
+    assert calls == 3
