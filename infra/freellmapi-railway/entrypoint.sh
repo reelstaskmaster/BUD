@@ -1,12 +1,14 @@
 #!/bin/sh
 set -eu
 
-mkdir -p /opt/data
-cat > /opt/data/config.yaml <<'EOF'
-custom_providers:
-  - name: freellmapi
-    base_url: http://freellmapi:3001/v1
+mkdir -p "$HERMES_HOME"
+cat > "$HERMES_HOME/config.yaml" <<'EOF'
+providers:
+  freellmapi:
+    api: http://freellmapi:3001/v1
     key_env: FREELLMAPI_API_KEY
+    transport: chat_completions
+
 model:
   provider: custom:freellmapi
   default: auto
