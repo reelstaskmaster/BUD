@@ -14,13 +14,7 @@ class AgentDecision:
 
 
 class AgentLoop:
-    """Bounded autonomous orchestration.
-
-    Fast requests keep the one-call path. Complex tasks run through three
-    explicit phases: execute, verify, and finalize. Each phase is another
-    model/tool turn, so external state can be inspected again after actions.
-    The loop is bounded to prevent runaway tool use and cost.
-    """
+    """Bounded autonomous orchestration."""
 
     _COMPLEX_MARKERS = (
         "analyze", "analyse", "investigate", "debug", "fix", "implement",
@@ -54,31 +48,11 @@ class AgentLoop:
             "- Do not claim actions or results that were not actually performed."
         )
 
-    def _phase_instructions(
-        self,
-        base: str,
-        phase: int,
-        previous: str,
-    ) -> str:
+    def _phase_instructions(self, base: str, phase: int, previous: str) -> str:
         phase_text = {
-            1: (
-                "AGENT PHASE 1 — EXECUTE. Inspect the relevant state and capabilities, "
-                "then perform the smallest useful action toward the goal. Use tools when "
-                "they provide real evidence or are required to act. Do not stop at a plan."
-            ),
-            2: (
-                "AGENT PHASE 2 — VERIFY. Independently verify the real external state "
-                "against the goal and acceptance criteria. Prefer read-only evidence. "
-                "If phase 1 failed or the result is incomplete, re-plan and take one "
-                "safe corrective action. Never repeat a completed write or create a "
-                "duplicate PR/branch just to appear active."
-            ),
-            3: (
-                "AGENT PHASE 3 — FINALIZE. Perform a final evidence check. If the goal "
-                "is not yet satisfied, take the minimum safe corrective action and "
-                "verify it. If it is satisfied, stop acting and report only what was "
-                "actually observed or executed. Do not invent success."
-            ),
+            1: "AGENT PHASE 1 — EXECUTE. Inspect state, then perform the smallest useful action toward the goal.",
+            2: "AGENT PHASE 2 — VERIFY. Independently verify external state; if incomplete, take one safe corrective action.",
+            3: "AGENT PHASE 3 — FINALIZE. Perform a final evidence check and report only what was actually observed or executed.",
         }[phase]
         prior = previous[-6000:] if previous else "No previous phase output."
         return (
@@ -86,6 +60,11 @@ class AgentLoop:
             "Previous phase output (may be incomplete; do not treat it as proof):\n"
             f"{prior}"
         )
+
+    @staticmethod
+    def _finalize_text(text: str) -> str:
+        marker = "AGENT_STATUS: DONE"
+        return text.split(marker, 1)[0].rstrip() if marker in text else text
 
     async def run(
         self,
@@ -106,9 +85,11 @@ class AgentLoop:
             result = await executor(self._phase_instructions(base, phase, previous))
             last_result = result
             previous = result.text
+            if result.text.strip() and "AGENT_STATUS: DONE" in result.text:
+                return ChatResult(self._finalize_text(result.text))
 
         if last_result is not None and last_result.text.strip():
-            return last_result
+            return ChatResult(self._finalize_text(last_result.text))
         return ChatResult(
             "Не удалось подтвердить завершение задачи после ограниченного цикла агента."
         )
