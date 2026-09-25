@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from app.services.openai_client import ChatResult
 from app.services.planner import Planner
-
-
-_AGENT_STATUS_RE = re.compile(r"\bAGENT_STATUS\s*:\s*(DONE|CONTINUE|BLOCKED)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -18,13 +14,7 @@ class AgentDecision:
 
 
 class AgentLoop:
-    """Bounded execution runtime for complex tasks.
-
-    Simple requests keep the existing one-call fast path. Complex requests run
-    a bounded observe -> execute -> verify/re-plan cycle. State is carried
-    between iterations through the previous result, while tool execution stays
-    inside the existing OpenAI tool loop.
-    """
+    """Bounded autonomous orchestration."""
 
     _COMPLEX_MARKERS = (
         "analyze", "analyse", "investigate", "debug", "fix", "implement",
@@ -49,17 +39,32 @@ class AgentLoop:
         return (
             f"{instructions}\n\n"
             f"{self.planner.render(plan)}\n\n"
-            "Autonomous execution contract:\n"
-            "- Inspect the relevant context before changing anything.\n"
-            "- Choose and execute the smallest useful action with available capabilities.\n"
-            "- Verify important results against observable evidence before claiming success.\n"
-            "- If an action fails, use the actual error to re-plan; do not repeat the same failed action blindly.\n"
-            "- Continue until the requested outcome is verified or an external blocker is confirmed.\n"
-            "- When the task is verified, end your response with AGENT_STATUS: DONE.\n"
-            "- When progress is possible but verification is incomplete, end with AGENT_STATUS: CONTINUE.\n"
-            "- When an external dependency genuinely blocks completion, end with AGENT_STATUS: BLOCKED.\n"
-            "- Never claim actions, tool results, commits, deployments, or verification that did not happen."
+            "Autonomous task contract:\n"
+            "- Work toward the user's actual goal, not an adjacent task.\n"
+            "- Decide the next useful action from the available capabilities.\n"
+            "- Verify important results before claiming completion.\n"
+            "- If an action fails, reassess and use a safe alternative when available.\n"
+            "- Stop when the requested outcome and acceptance criteria are satisfied.\n"
+            "- Do not claim actions or results that were not actually performed."
         )
+
+    def _phase_instructions(self, base: str, phase: int, previous: str) -> str:
+        phase_text = {
+            1: "AGENT PHASE 1 — EXECUTE. Inspect state, then perform the smallest useful action toward the goal.",
+            2: "AGENT PHASE 2 — VERIFY. Independently verify external state; if incomplete, take one safe corrective action.",
+            3: "AGENT PHASE 3 — FINALIZE. Perform a final evidence check and report only what was actually observed or executed.",
+        }[phase]
+        prior = previous[-6000:] if previous else "No previous phase output."
+        return (
+            f"{base}\n\n{phase_text}\n"
+            "Previous phase output (may be incomplete; do not treat it as proof):\n"
+            f"{prior}"
+        )
+
+    @staticmethod
+    def _finalize_text(text: str) -> str:
+        marker = "AGENT_STATUS: DONE"
+        return text.split(marker, 1)[0].rstrip() if marker in text else text
 
     async def run(
         self,
@@ -69,49 +74,22 @@ class AgentLoop:
         executor: Callable[[str], Awaitable[ChatResult]],
     ) -> ChatResult:
         decision = self.decide(query)
-        runtime_instructions = self.augment_instructions(instructions, query)
         if decision.mode == "fast":
-            return await executor(runtime_instructions)
+            return await executor(instructions)
 
-        previous = ""
+        base = self.augment_instructions(instructions, query)
         last_result: ChatResult | None = None
-        for iteration in range(1, decision.max_iterations + 1):
-            iteration_instructions = runtime_instructions
-            if iteration > 1:
-                iteration_instructions += (
-                    f"\n\nAgent iteration {iteration}/{decision.max_iterations}. "
-                    "Continue from the previous attempt. Do not repeat a failed action blindly. "
-                    "Use the observed result below to choose the next action.\n"
-                    f"Previous attempt result:\n{previous[:12000]}"
-                )
+        previous = ""
 
-            result = await executor(iteration_instructions)
+        for phase in range(1, decision.max_iterations + 1):
+            result = await executor(self._phase_instructions(base, phase, previous))
             last_result = result
-            status = _agent_status(result.text)
-            cleaned = _strip_agent_status(result.text)
-            previous = cleaned or result.text
+            previous = result.text
+            if result.text.strip() and "AGENT_STATUS: DONE" in result.text:
+                return ChatResult(self._finalize_text(result.text))
 
-            if status == "DONE":
-                return ChatResult(cleaned, result.image_bytes, result.image_mime_type, result.image_prompt)
-            if status == "BLOCKED":
-                return ChatResult(cleaned, result.image_bytes, result.image_mime_type, result.image_prompt)
-
-        if last_result is None:
-            return ChatResult("Не удалось запустить выполнение задачи.")
-
-        cleaned = _strip_agent_status(last_result.text)
+        if last_result is not None and last_result.text.strip():
+            return ChatResult(self._finalize_text(last_result.text))
         return ChatResult(
-            cleaned or "Не удалось подтвердить завершение задачи.",
-            last_result.image_bytes,
-            last_result.image_mime_type,
-            last_result.image_prompt,
+            "Не удалось подтвердить завершение задачи после ограниченного цикла агента."
         )
-
-
-def _agent_status(text: str) -> str | None:
-    match = _AGENT_STATUS_RE.search(text or "")
-    return match.group(1).upper() if match else None
-
-
-def _strip_agent_status(text: str) -> str:
-    return _AGENT_STATUS_RE.sub("", text or "").strip()
