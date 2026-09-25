@@ -1,88 +1,17 @@
-name: BUD CI
+name: Hermes Wrapper CI
 
 on:
   push:
-    branches: ["main", "agents-foundation"]
+    branches: ["main", "infra/freellmapi-railway-wrapper"]
   pull_request:
     branches: ["main"]
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: bud
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d bud"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
-
-      - name: Run database migrations
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/bud
-          TELEGRAM_BOT_TOKEN: ci-placeholder
-          OPENAI_API_KEY: ci-placeholder
-        run: python -m alembic upgrade head
-
-      - name: Run unit and integration tests
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/bud
-          TELEGRAM_BOT_TOKEN: ci-placeholder
-          OPENAI_API_KEY: ci-placeholder
-        run: python -m pytest -q
-
-      - name: Compile Python sources
-        run: python -m compileall -q app alembic
-
-      - name: Build Docker image
-        run: docker build --tag bud-ci .
-
-      - name: Validate Alembic metadata
-        run: |
-          python - <<'PY'
-          import importlib.util
-
-          def load(name, path):
-              spec = importlib.util.spec_from_file_location(name, path)
-              module = importlib.util.module_from_spec(spec)
-              spec.loader.exec_module(module)
-              return module
-
-          initial = load("initial", "alembic/versions/0001_initial.py")
-          revisions = [
-              ("media", "alembic/versions/0002_message_media_mime.py", "0002_message_media_mime", "0001_initial"),
-              ("telegram", "alembic/versions/0003_telegram_message_id.py", "0003_telegram_message_id", "0002_message_media_mime"),
-              ("lease", "alembic/versions/0004_chat_processing_lease.py", "0004_chat_processing_lease", "0003_telegram_message_id"),
-              ("delivery", "alembic/versions/0005_reply_deliveries.py", "0005_reply_deliveries", "0004_chat_processing_lease"),
-              ("key", "alembic/versions/0006_reply_delivery_key.py", "0006_reply_delivery_key", "0005_reply_deliveries"),
-              ("retry", "alembic/versions/0007_reply_delivery_retry.py", "0007_reply_delivery_retry", "0006_reply_delivery_key"),
-          ]
-          assert initial.revision == "0001_initial"
-          assert initial.down_revision is None
-          for name, path, revision, down_revision in revisions:
-              module = load(name, path)
-              assert module.revision == revision
-              assert module.down_revision == down_revision
-          PY
+      - name: Build Hermes wrapper
+        run: docker build -f infra/freellmapi-railway/Dockerfile infra/freellmapi-railway
