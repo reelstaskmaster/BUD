@@ -1,5 +1,6 @@
 from app.services.agent_loop import AgentLoop
 from app.services.openai_client import ChatResult
+import pytest
 
 
 def test_simple_request_uses_fast_path() -> None:
@@ -22,6 +23,7 @@ def test_fast_path_does_not_change_instructions() -> None:
     assert loop.augment_instructions("base", "Привет") == "base"
 
 
+@pytest.mark.asyncio
 async def test_complex_request_runs_execute_verify_finalize_phases() -> None:
     loop = AgentLoop()
     calls: list[str] = []
@@ -45,6 +47,7 @@ async def test_complex_request_runs_execute_verify_finalize_phases() -> None:
     assert "phase 2" in calls[2]
 
 
+@pytest.mark.asyncio
 async def test_complex_empty_results_still_end_bounded() -> None:
     loop = AgentLoop()
     calls = 0
