@@ -157,6 +157,105 @@ CHAT_TOOLS: list[dict[str, Any]] = [
         },
         "strict": True,
     },
+    {
+        "type": "function",
+        "name": "web_fetch",
+        "description": "Fetch a public HTTP(S) webpage or API URL and return its text. Use this when current internet evidence is needed. Never use it for localhost, private networks, or internal services.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Public http:// or https:// URL to fetch."},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "github_list_directory",
+        "description": "List files and directories at a path in a GitHub repository so you can inspect the project before editing it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "path": {"type": "string", "description": "Directory path, or empty string for repository root."},
+                "ref": {"type": "string", "description": "Branch, tag, or commit SHA. Defaults to main."},
+            },
+            "required": ["repository", "path", "ref"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "github_read_file",
+        "description": "Read a text file from GitHub. Use observed repository contents as evidence instead of guessing.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "path": {"type": "string", "description": "Repository file path."},
+                "ref": {"type": "string", "description": "Branch, tag, or commit SHA. Defaults to main."},
+            },
+            "required": ["repository", "path", "ref"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "github_create_branch",
+        "description": "Create a new GitHub branch from an existing branch or ref. Use before repository writes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "branch": {"type": "string", "description": "New branch name."},
+                "base_ref": {"type": "string", "description": "Existing base branch, tag, or commit."},
+            },
+            "required": ["repository", "branch", "base_ref"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "github_update_file",
+        "description": "Create or update one text file on an existing GitHub branch. The operation is verified after the write.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "path": {"type": "string", "description": "Repository file path."},
+                "branch": {"type": "string", "description": "Existing target branch."},
+                "content": {"type": "string", "description": "Complete UTF-8 file content."},
+                "message": {"type": "string", "description": "Commit message."},
+                "sha": {"type": "string", "description": "Current blob SHA when updating an existing file; empty for a new file."},
+            },
+            "required": ["repository", "path", "branch", "content", "message", "sha"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "github_create_pr",
+        "description": "Create a draft pull request for verified changes. Never merge the pull request.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string", "description": "GitHub repository in owner/name format."},
+                "head": {"type": "string", "description": "Source branch."},
+                "base": {"type": "string", "description": "Target branch."},
+                "title": {"type": "string", "description": "Pull request title."},
+                "body": {"type": "string", "description": "Pull request description including verification status."},
+            },
+            "required": ["repository", "head", "base", "title", "body"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
 ]
 
 
