@@ -10,5 +10,3 @@ services:
       HERMES_HOME: /opt/data
       HERMES_UID: "10000"
       HERMES_GID: "10000"
-    # Do not publish the gateway API port by default.
-    # Telegram works without exposing the API server.

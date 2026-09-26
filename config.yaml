@@ -1,0 +1,9 @@
+# BUD uses Hermes' native runtime and an isolated Docker terminal backend.
+# Model/provider credentials are stored in hermes-data/.env and the Hermes setup/config.
+terminal:
+  backend: docker
+  docker_forward_env: []
+  container_persistent: true
+
+api_server:
+  enabled: false
