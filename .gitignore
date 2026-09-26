@@ -1,15 +1,4 @@
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-dist/
-build/
+hermes-data/
 .env
-.python-version
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
 *.log
 .DS_Store

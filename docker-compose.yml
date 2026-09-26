@@ -1,31 +1,14 @@
 services:
-  db:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_USER: telegpt
-      POSTGRES_PASSWORD: telegpt
-      POSTGRES_DB: telegpt
-    ports:
-      - "5433:5432"
+  bud:
+    image: nousresearch/hermes-agent:latest
+    container_name: bud-hermes
+    restart: unless-stopped
+    command: ["gateway", "run"]
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U telegpt -d telegpt"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  bot:
-    build: .
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - .env
+      - ./hermes-data:/opt/data
     environment:
-      DATABASE_URL: postgresql+asyncpg://telegpt:telegpt@db:5432/telegpt
-    restart: unless-stopped
-
-volumes:
-  pgdata:
+      HERMES_HOME: /opt/data
+      HERMES_UID: "10000"
+      HERMES_GID: "10000"
+    # Do not publish the gateway API port by default.
+    # Telegram works without exposing the API server.
