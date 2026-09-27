@@ -1,8 +1,21 @@
 # Hermes-native security defaults for BUD.
+# Third-party MCPs are intentionally absent until they pass:
+# source review -> security scan -> permissions audit -> sandbox test -> approval.
+
 terminal:
   backend: docker
   docker_forward_env: []
+  docker_mount_cwd_to_workspace: false
+  container_cpu: 2
+  container_memory: 4096
+  container_disk: 20480
   container_persistent: true
+
+mcp:
+  discovery_concurrency: 1
+
+gateway:
+  allow_all_users: false
 
 platforms:
   api_server:
