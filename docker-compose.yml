@@ -4,7 +4,6 @@ services:
     container_name: bud-hermes
     restart: unless-stopped
     command: ["gateway", "run"]
-    init: true
     security_opt:
       - no-new-privileges:true
     pids_limit: 512
