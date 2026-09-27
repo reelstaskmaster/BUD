@@ -1,11 +1,26 @@
 services:
   bud:
-    image: nousresearch/hermes-agent:latest
+    image: nousresearch/hermes-agent:v2026.9.21
     container_name: bud-hermes
     restart: unless-stopped
     command: ["gateway", "run"]
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    shm_size: "1gb"
     volumes:
-      - ./hermes-data:/opt/data
+      - type: bind
+        source: ./hermes-data
+        target: /opt/data
+      - type: bind
+        source: ./config.yaml
+        target: /opt/data/config.yaml
+        read_only: true
+      - type: bind
+        source: ./SOUL.md
+        target: /opt/data/SOUL.md
+        read_only: true
     environment:
       HERMES_HOME: /opt/data
       HERMES_UID: "10000"
