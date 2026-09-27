@@ -2,6 +2,18 @@
 # Third-party MCPs are intentionally absent until they pass:
 # source review -> security scan -> permissions audit -> sandbox test -> approval.
 
+approvals:
+  mode: manual
+  timeout: 300
+
+checkpoints:
+  enabled: true
+
+security:
+  redact_secrets: true
+  tirith_enabled: true
+  tirith_fail_open: false
+
 terminal:
   backend: docker
   docker_forward_env: []
