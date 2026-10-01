@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.mcp_manager import MCPManager, _tool_risk, _validate_http_endpoint
+from app.services.mcp_manager import MCPManager, _tool_risk, _validate_http_endpoint, _validate_tool_policy
 from app.services.capability_registry import RiskLevel
 
 
