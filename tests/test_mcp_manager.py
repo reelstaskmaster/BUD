@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.mcp_manager import MCPManager, _tool_risk, _validate_http_endpoint
+from app.services.mcp_manager import MCPManager, _tool_risk, _validate_http_endpoint, _validate_tool_policy
 from app.services.capability_registry import RiskLevel
 
 
@@ -37,10 +37,14 @@ def test_loopback_http_is_allowed_for_local_testing():
 
 
 def test_tool_risk_is_explicit():
-    config = {"write_tools": ["write"], "destructive_tools": ["delete"]}
-    assert _tool_risk(config, "read") == RiskLevel.READ
-    assert _tool_risk(config, "write") == RiskLevel.WRITE
-    assert _tool_risk(config, "delete") == RiskLevel.DESTRUCTIVE
+    read = {"read"}
+    write = {"write"}
+    destructive = {"delete"}
+    assert _tool_risk(read, write, destructive, "read") == RiskLevel.READ
+    assert _tool_risk(read, write, destructive, "write") == RiskLevel.WRITE
+    assert _tool_risk(read, write, destructive, "delete") == RiskLevel.DESTRUCTIVE
+    with pytest.raises(ValueError):
+        _tool_risk(read, write, destructive, "unknown")
 
 
 def test_config_is_explicit_and_bounded():
@@ -75,3 +79,27 @@ async def test_render_result_sanitizes_length():
         content=[SimpleNamespace(text="x" * 5000)],
     )
     assert len(manager._render_result(result)) == 1000
+
+
+def test_server_config_requires_explicit_allowlist_and_classification():
+    manager = MCPManager(Settings())
+    with pytest.raises(ValueError, match="allowed_tools"):
+        from app.services.mcp_manager import _validate_tool_policy
+        _validate_tool_policy({"name": "demo"})
+
+
+@pytest.mark.asyncio
+async def test_server_connect_accepts_explicit_policy():
+    manager = MCPManager(Settings())
+    config = {
+        "name": "demo",
+        "transport": "streamable_http",
+        "url": "https://example.com/mcp",
+        "allowed_tools": ["search"],
+        "read_tools": ["search"],
+        "write_tools": [],
+        "destructive_tools": [],
+    }
+    # Policy validation happens before any network connection.
+    from app.services.mcp_manager import _validate_tool_policy
+    assert _validate_tool_policy(config)[0] == {"search"}

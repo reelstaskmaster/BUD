@@ -149,6 +149,8 @@ class MCPManager:
 
     async def _connect_one(self, config: dict[str, Any]) -> None:
         name = str(config["name"])
+        allowed, read_tools, write_tools, destructive_tools = _validate_tool_policy(config)
+
         transport = str(config.get("transport") or "streamable_http").strip().lower()
 
         if transport in {"streamable_http", "http"}:
@@ -179,12 +181,12 @@ class MCPManager:
                 client = Client(url)
         elif transport == "stdio":
             command = str(config.get("command") or "").strip()
-            allowed = {
+            allowed_commands = {
                 item.strip()
                 for item in str(getattr(self.settings, "mcp_stdio_allowed_commands", "") or "").split(",")
                 if item.strip()
             }
-            if not command or command not in allowed:
+            if not command or command not in allowed_commands:
                 raise ValueError(
                     f"MCP stdio command is not allow-listed: {command!r}"
                 )
@@ -205,20 +207,25 @@ class MCPManager:
 
         await self._exit_stack.enter_async_context(client)
         discovered = await asyncio.wait_for(client.list_tools(), timeout=self.timeout_s)
+        remote_names = {str(remote.name) for remote in discovered.tools}
+        missing = allowed - remote_names
+        if missing:
+            raise ValueError(f"MCP server {name!r} did not expose allowed tools: {sorted(missing)}")
+
         tool_map: dict[str, MCPTool] = {}
         for remote in discovered.tools:
             remote_name = str(remote.name)
-            if not _safe_name(remote_name):
-                logger.warning("Skipping unsafe MCP tool name %r from %s", remote_name, name)
+            if remote_name not in allowed:
                 continue
+            if not _safe_name(remote_name):
+                raise ValueError(f"Unsafe allowed MCP tool name: {remote_name!r}")
             exposed = f"mcp__{name}__{remote_name}"
             if exposed in self._tools:
                 raise ValueError(f"MCP tool name collision: {exposed}")
             parameters = dict(remote.input_schema or {})
             if parameters.get("type") != "object":
-                logger.warning("Skipping MCP tool %s: input schema is not an object", exposed)
-                continue
-            risk = _tool_risk(config, remote_name)
+                raise ValueError(f"MCP tool {exposed} must use an object input schema")
+            risk = _tool_risk(read_tools, write_tools, destructive_tools, remote_name)
             item = MCPTool(
                 exposed_name=exposed,
                 server_name=name,
@@ -259,6 +266,14 @@ def _safe_name(value: str) -> bool:
     return bool(value) and len(value) <= 80 and all(
         char.isalnum() or char in "._-" for char in value
     )
+
+
+def _string_set(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("MCP tool allow/risk lists must be string arrays")
+    return {item.strip() for item in value if item.strip()}
 
 
 def _validate_http_endpoint(url: str) -> None:
@@ -339,14 +354,34 @@ def _resolve_env_map(value: Any, field_name: str) -> dict[str, str]:
     return result
 
 
-def _tool_risk(config: dict[str, Any], tool_name: str) -> RiskLevel:
-    destructive = {str(item) for item in config.get("destructive_tools", []) or []}
-    write = {str(item) for item in config.get("write_tools", []) or []}
+def _validate_tool_policy(config: dict[str, Any]) -> tuple[set[str], set[str], set[str], set[str]]:
+    allowed = _string_set(config.get("allowed_tools"))
+    read_tools = _string_set(config.get("read_tools"))
+    write_tools = _string_set(config.get("write_tools"))
+    destructive_tools = _string_set(config.get("destructive_tools"))
+    if not allowed:
+        raise ValueError(f"MCP server {config.get('name')!r} must define a non-empty allowed_tools list")
+    classified = read_tools | write_tools | destructive_tools
+    if classified != allowed:
+        raise ValueError(f"MCP server {config.get('name')!r} must classify every allowed tool exactly once")
+    if (read_tools & write_tools) or (read_tools & destructive_tools) or (write_tools & destructive_tools):
+        raise ValueError(f"MCP server {config.get('name')!r} has overlapping tool risk classifications")
+    return allowed, read_tools, write_tools, destructive_tools
+
+
+def _tool_risk(
+    read: set[str],
+    write: set[str],
+    destructive: set[str],
+    tool_name: str,
+) -> RiskLevel:
     if tool_name in destructive:
         return RiskLevel.DESTRUCTIVE
     if tool_name in write:
         return RiskLevel.WRITE
-    return RiskLevel.READ
+    if tool_name in read:
+        return RiskLevel.READ
+    raise ValueError(f"MCP tool has no explicit risk classification: {tool_name}")
 
 
 def _tool_description(server: str, tool: str, description: Any) -> str:
