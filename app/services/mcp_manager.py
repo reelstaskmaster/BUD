@@ -266,15 +266,39 @@ def _validate_http_endpoint(url: str) -> None:
         raise ValueError("MCP HTTP endpoint must use http:// or https:// with a hostname")
     if parsed.username or parsed.password:
         raise ValueError("MCP endpoint credentials must not be embedded in the URL")
-    if parsed.scheme == "http":
-        host = parsed.hostname.lower()
-        if host not in _BLOCKED_HOSTS:
-            try:
-                address = ipaddress.ip_address(host)
-            except ValueError:
-                raise ValueError("MCP public HTTP endpoints must use HTTPS")
-            if not address.is_loopback:
-                raise ValueError("MCP public HTTP endpoints must use HTTPS")
+
+    host = parsed.hostname.lower()
+    if parsed.scheme == "http" and host not in _BLOCKED_HOSTS:
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            raise ValueError("MCP public HTTP endpoints must use HTTPS")
+        if not address.is_loopback:
+            raise ValueError("MCP public HTTP endpoints must use HTTPS")
+
+    # Prevent DNS rebinding/SSRF through an HTTPS hostname that resolves to
+    # loopback, private, link-local, multicast, reserved, or unspecified IPs.
+    if host in _BLOCKED_HOSTS:
+        return
+    try:
+        addresses = {
+            ipaddress.ip_address(item[4][0])
+            for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        }
+    except socket.gaierror as exc:
+        raise ValueError("MCP endpoint hostname could not be resolved") from exc
+    if not addresses:
+        raise ValueError("MCP endpoint hostname resolved to no addresses")
+    if any(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+        for address in addresses
+    ):
+        raise ValueError("MCP endpoint resolves to a non-public network address")
 
 
 def _resolve_env_map(value: Any, field_name: str) -> dict[str, str]:
