@@ -681,7 +681,7 @@ class OpenAIService:
                 response = await self._freellmapi_client.chat.completions.create(
                     model=self.settings.freellmapi_chat_model,
                     messages=history,
-                    tools=[_to_openai_chat_tool(tool) for tool in CHAT_TOOLS],
+                    tools=[_to_openai_chat_tool(tool) for tool in getattr(self, "_chat_tools", CHAT_TOOLS)],
                 )
             except Exception as exc:
                 raise _provider_error("FreeLLMAPI", exc) from exc
@@ -800,7 +800,7 @@ class OpenAIService:
                 "model": self.settings.chat_model,
                 "instructions": instructions,
                 "input": current_input,
-                "tools": CHAT_TOOLS,
+                "tools": getattr(self, "_chat_tools", CHAT_TOOLS),
             }
             if previous_response_id:
                 kwargs["previous_response_id"] = previous_response_id
@@ -879,7 +879,7 @@ class OpenAIService:
     ) -> ChatResult:
         api_key = api_key or self.settings.gemini_api_key
         contents = [_to_gemini_message(message) for message in messages]
-        tools = [{"functionDeclarations": [_to_gemini_tool(tool) for tool in CHAT_TOOLS]}]
+        tools = [{"functionDeclarations": [_to_gemini_tool(tool) for tool in getattr(self, "_chat_tools", CHAT_TOOLS)]}]
         image_bytes: bytes | None = None
         image_prompt: str | None = None
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.settings.gemini_chat_model}:generateContent"

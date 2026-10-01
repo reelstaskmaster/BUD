@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     needle_enabled: bool = True
     needle_confidence_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
 
+    # MCP servers are explicit configuration only. No server discovery.
+    mcp_enabled: bool = True
+    mcp_servers_json: str = ""
+    mcp_timeout_s: float = Field(default=30.0, gt=1, le=300)
+    mcp_max_output_chars: int = Field(default=20_000, ge=1_000, le=20_000)
+    mcp_stdio_allowed_commands: str = ""
+
     github_token: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
