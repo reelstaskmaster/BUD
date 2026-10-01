@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     claudex_reviewer_provider: str = "gemini"
     claudex_reviewer_model: str = ""
     claudex_max_review_rounds: int = Field(default=2, ge=1, le=5)
+
+    # Needle is a local, non-authoritative tool router. It never executes tools.
+    needle_enabled: bool = True
+    needle_confidence_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+
     github_token: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
