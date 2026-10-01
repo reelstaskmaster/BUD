@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
