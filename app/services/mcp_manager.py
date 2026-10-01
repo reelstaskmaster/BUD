@@ -181,12 +181,12 @@ class MCPManager:
                 client = Client(url)
         elif transport == "stdio":
             command = str(config.get("command") or "").strip()
-            allowed = {
+            allowed_commands = {
                 item.strip()
                 for item in str(getattr(self.settings, "mcp_stdio_allowed_commands", "") or "").split(",")
                 if item.strip()
             }
-            if not command or command not in allowed:
+            if not command or command not in allowed_commands:
                 raise ValueError(
                     f"MCP stdio command is not allow-listed: {command!r}"
                 )
@@ -224,8 +224,7 @@ class MCPManager:
                 raise ValueError(f"MCP tool name collision: {exposed}")
             parameters = dict(remote.input_schema or {})
             if parameters.get("type") != "object":
-                logger.warning("Skipping MCP tool %s: input schema is not an object", exposed)
-                continue
+                raise ValueError(f"MCP tool {exposed} must use an object input schema")
             risk = _tool_risk(read_tools, write_tools, destructive_tools, remote_name)
             item = MCPTool(
                 exposed_name=exposed,
