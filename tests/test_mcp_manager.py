@@ -75,7 +75,9 @@ async def test_render_result_sanitizes_length():
         content=[SimpleNamespace(text="x" * 5000)],
     )
     assert len(manager._render_result(result)) == 1000
-\n\n@pytest.mark.asyncio
+
+
+@pytest.mark.asyncio
 async def test_server_config_requires_explicit_allowlist_and_classification():
     manager = MCPManager(Settings())
     with pytest.raises(ValueError, match="allowed_tools"):
