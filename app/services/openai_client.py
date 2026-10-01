@@ -530,7 +530,6 @@ class OpenAIService:
             response = await self._freellmapi_client.chat.completions.create(
                 model=model or self.settings.freellmapi_chat_model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                tools=[],
             )
             return (response.choices[0].message.content or "").strip()
 
