@@ -14,7 +14,8 @@ from app.services.agent_loop import AgentLoop
 from app.services.claudex_loop import ClaudexLoop
 from app.services.context_manager import ContextManager
 from app.services.memory import MemoryService
-from app.services.openai_client import ChatResult, OpenAIInputMessage, OpenAIService
+from app.services.needle_router import NeedleRouter
+from app.services.openai_client import CHAT_TOOLS, ChatResult, OpenAIInputMessage, OpenAIService
 from app.services.prompt import build_instructions
 from app.services.capability_executor import CapabilityExecutor
 from app.services.capability_registry import Capability, CapabilityRegistry, RiskLevel
@@ -48,6 +49,10 @@ class ReplyPipeline:
         self.context_manager = ContextManager(settings.context_max_chars)
         self.capabilities = CapabilityRegistry()
         self.capability_executor = CapabilityExecutor(self.capabilities)
+        self.needle_router = NeedleRouter(
+            enabled=settings.needle_enabled,
+            confidence_threshold=settings.needle_confidence_threshold,
+        )
         runtime = RuntimeCapabilities(settings)
         self.capabilities.register(Capability("web_fetch", "Fetch public internet content. Read-only.", RiskLevel.READ, runtime.web_fetch))
         self.capabilities.register(Capability("github_list_directory", "List a GitHub repository directory. Read-only.", RiskLevel.READ, runtime.github_list_directory))
@@ -93,6 +98,11 @@ class ReplyPipeline:
 
         openai_messages = self.context_manager.trim_messages(openai_messages)
         instructions = self.context_manager.trim_instructions(instructions)
+
+        needle_route = await self.needle_router.route(query, CHAT_TOOLS)
+        needle_hint = self.needle_router.render_hint(needle_route)
+        if needle_hint:
+            instructions += "\\n\\n" + needle_hint
 
         async with self.session_factory() as session:
 
