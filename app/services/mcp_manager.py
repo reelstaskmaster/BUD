@@ -255,6 +255,245 @@ class MCPManager:
         return f"{prefix} {rendered}".strip()
 
 
+def _validate_tool_policy(config: dict[str, Any]) -> tuple[set[str], set[str], set[str], set[str]]:
+    allowed = _string_set(config.get("allowed_tools"))
+    read_tools = _string_set(config.get("read_tools"))
+    write_tools = _string_set(config.get("write_tools"))
+    destructive_tools = _string_set(config.get("destructive_tools"))
+    if not allowed:
+        raise ValueError(f"MCP server {config.get('name')!r} must define a non-empty allowed_tools list")
+    classified = read_tools | write_tools | destructive_tools
+    if classified != allowed:
+        raise ValueError(f"MCP server {config.get('name')!r} must classify every allowed tool exactly once")
+    if (read_tools & write_tools) or (read_tools & destructive_tools) or (write_tools & destructive_tools):
+        raise ValueError(f"MCP server {config.get('name')!r} has overlapping tool risk classifications")
+    return allowed, read_tools, write_tools, destructive_tools
+
+
+def _safe_name(value: str) -> bool:
+    return bool(value) and len(value) <= 80 and all(
+        char.isalnum() or char in "._-" for char in value
+    )
+
+
+def _validate_http_endpoint(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_HTTP_SCHEMES or not parsed.hostname:
+        raise ValueError("MCP HTTP endpoint must use http:// or https:// with a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("MCP endpoint credentials must not be embedded in the URL")
+
+    host = parsed.hostname.lower()
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if parsed.scheme == "http" and literal.is_loopback:
+            return
+        if (
+            literal.is_private
+            or literal.is_loopback
+            or literal.is_link_local
+            or literal.is_multicast
+            or literal.is_reserved
+            or literal.is_unspecified
+        ):
+            raise ValueError("MCP endpoint uses a non-public network address")
+        if parsed.scheme == "http":
+            raise ValueError("MCP public HTTP endpoints must use HTTPS")
+        return
+
+    if parsed.scheme == "http" and host not in _BLOCKED_HOSTS:
+        raise ValueError("MCP public HTTP endpoints must use HTTPS")
+
+    if host in _BLOCKED_HOSTS:
+        return
+
+    # Prevent DNS rebinding/SSRF through an HTTPS hostname that resolves to
+    # loopback, private, link-local, multicast, reserved, or unspecified IPs.
+    try:
+        addresses = {
+            ipaddress.ip_address(item[4][0])
+            for item in socket.getaddrinfo(
+                host,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except socket.gaierror as exc:
+        raise ValueError("MCP endpoint hostname could not be resolved") from exc
+    if not addresses:
+        raise ValueError("MCP endpoint hostname resolved to no addresses")
+    if any(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+        for address in addresses
+    ):
+        raise ValueError("MCP endpoint resolves to a non-public network address")
+
+def _resolve_env_map(value: Any, field_name: str) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"MCP {field_name} must be an object mapping names to environment variables")
+    result: dict[str, str] = {}
+    for target, source in value.items():
+        if not isinstance(target, str) or not isinstance(source, str):
+            raise ValueError(f"MCP {field_name} entries must map strings to strings")
+        if not _safe_name(target) or not _safe_name(source):
+            raise ValueError(f"MCP {field_name} contains an unsafe name")
+        value = os.environ.get(source)
+        if value:
+            result[target] = value
+    return result
+
+
+def _tool_risk(
+    read: set[str],
+    write: set[str],
+    destructive: set[str],
+    tool_name: str,
+) -> RiskLevel:
+    if tool_name in destructive:
+        return RiskLevel.DESTRUCTIVE
+    if tool_name in write:
+        return RiskLevel.WRITE
+    if tool_name in read:
+        return RiskLevel.READ
+    raise ValueError(f"MCP tool has no explicit risk classification: {tool_name}")
+
+
+def _tool_description(server: str, tool: str, description: Any) -> str:
+    base = str(description or f"MCP tool {tool} exposed by {server}.")
+    return f"[MCP:{server}] {base}"[:4000]        allowed, read_tools, write_tools, destructive_tools = _validate_tool_policy(config)
+
+        transport = str(config.get("transport") or "streamable_http").strip().lower()
+
+        if transport in {"streamable_http", "http"}:
+            url = str(config.get("url") or "").strip()
+            _validate_http_endpoint(url)
+            headers = _resolve_env_map(config.get("headers_env"), "headers_env")
+            if headers:
+                # The high-level Client accepts a URL but does not expose custom
+                # headers. Use the SDK transport directly when auth is configured.
+                from mcp.client.streamable_http import streamable_http_client
+                import httpx2
+
+                http_client = httpx2.AsyncClient(
+                    headers=headers,
+                    timeout=httpx2.Timeout(
+                        self.timeout_s,
+                        connect=min(self.timeout_s, 30.0),
+                        read=max(self.timeout_s, 30.0),
+                    ),
+                )
+                transport_cm = streamable_http_client(
+                    url,
+                    http_client=http_client,
+                    terminate_on_close=True,
+                )
+                client = Client(transport_cm)
+            else:
+                client = Client(url)
+        elif transport == "stdio":
+            command = str(config.get("command") or "").strip()
+            allowed = {
+                item.strip()
+                for item in str(getattr(self.settings, "mcp_stdio_allowed_commands", "") or "").split(",")
+                if item.strip()
+            }
+            if not command or command not in allowed:
+                raise ValueError(
+                    f"MCP stdio command is not allow-listed: {command!r}"
+                )
+            args = config.get("args") or []
+            if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+                raise ValueError(f"MCP stdio args for {name} must be a string array")
+            env = _resolve_env_map(config.get("env_from"), "env_from")
+            client = Client(
+                StdioServerParameters(
+                    command=command,
+                    args=args,
+                    env=env or None,
+                    cwd=config.get("cwd"),
+                )
+            )
+        else:
+            raise ValueError(f"Unsupported MCP transport: {transport}")
+
+        await self._exit_stack.enter_async_context(client)
+        discovered = await asyncio.wait_for(client.list_tools(), timeout=self.timeout_s)
+        tool_map: dict[str, MCPTool] = {}
+        for remote in discovered.tools:
+            remote_name = str(remote.name)
+            if not _safe_name(remote_name):
+                logger.warning("Skipping unsafe MCP tool name %r from %s", remote_name, name)
+                continue
+            exposed = f"mcp__{name}__{remote_name}"
+            if exposed in self._tools:
+                raise ValueError(f"MCP tool name collision: {exposed}")
+            parameters = dict(remote.input_schema or {})
+            if parameters.get("type") != "object":
+                logger.warning("Skipping MCP tool %s: input schema is not an object", exposed)
+                continue
+            risk = _tool_risk(config, remote_name)
+            item = MCPTool(
+                exposed_name=exposed,
+                server_name=name,
+                tool_name=remote_name,
+                description=_tool_description(name, remote_name, remote.description),
+                parameters=parameters,
+                risk=risk,
+            )
+            tool_map[remote_name] = item
+            self._tools[exposed] = item
+
+        self._servers[name] = _ConnectedServer(name=name, client=client, tools=tool_map)
+
+    def _render_result(self, result: Any) -> str:
+        if getattr(result, "is_error", False):
+            prefix = "MCP tool reported an error."
+        else:
+            prefix = ""
+
+        structured = getattr(result, "structured_content", None)
+        if structured is not None:
+            rendered = json.dumps(structured, ensure_ascii=False, default=str)
+        else:
+            chunks: list[str] = []
+            for item in getattr(result, "content", []) or []:
+                text = getattr(item, "text", None)
+                if text is not None:
+                    chunks.append(str(text))
+            rendered = "\n".join(chunks).strip()
+            if not rendered:
+                rendered = str(result)
+
+        rendered = rendered[: self.max_output_chars]
+        return f"{prefix} {rendered}".strip()
+
+
+def _validate_tool_policy(config: dict[str, Any]) -> tuple[set[str], set[str], set[str], set[str]]:
+    allowed = _string_set(config.get("allowed_tools"))
+    read_tools = _string_set(config.get("read_tools"))
+    write_tools = _string_set(config.get("write_tools"))
+    destructive_tools = _string_set(config.get("destructive_tools"))
+    if not allowed:
+        raise ValueError(f"MCP server {config.get('name')!r} must define a non-empty allowed_tools list")
+    classified = read_tools | write_tools | destructive_tools
+    if classified != allowed:
+        raise ValueError(f"MCP server {config.get('name')!r} must classify every allowed tool exactly once")
+    if (read_tools & write_tools) or (read_tools & destructive_tools) or (write_tools & destructive_tools):
+        raise ValueError(f"MCP server {config.get('name')!r} has overlapping tool risk classifications")
+    return allowed, read_tools, write_tools, destructive_tools
+
+
 def _safe_name(value: str) -> bool:
     return bool(value) and len(value) <= 80 and all(
         char.isalnum() or char in "._-" for char in value
