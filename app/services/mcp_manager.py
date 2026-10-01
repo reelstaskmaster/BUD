@@ -339,7 +339,7 @@ def _resolve_env_map(value: Any, field_name: str) -> dict[str, str]:
     return result
 
 
-def _tool_risk(config: dict[str, Any], tool_name: str) -> RiskLevel:
+def _tool_risk(read: set[str], write: set[str], destructive: set[str], tool_name: str) -> RiskLevel:
     destructive = {str(item) for item in config.get("destructive_tools", []) or []}
     write = {str(item) for item in config.get("write_tools", []) or []}
     if tool_name in destructive:
