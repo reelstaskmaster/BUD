@@ -14,6 +14,7 @@ from app.services.agent_loop import AgentLoop
 from app.services.claudex_loop import ClaudexLoop
 from app.services.context_manager import ContextManager
 from app.services.memory import MemoryService
+from app.services.mcp_manager import MCPManager
 from app.services.needle_router import NeedleRouter
 from app.services.openai_client import CHAT_TOOLS, ChatResult, OpenAIInputMessage, OpenAIService
 from app.services.prompt import build_instructions
@@ -53,6 +54,8 @@ class ReplyPipeline:
             enabled=settings.needle_enabled,
             confidence_threshold=settings.needle_confidence_threshold,
         )
+        self.mcp_manager = MCPManager(settings)
+        self._mcp_started = False
         runtime = RuntimeCapabilities(settings)
         self.capabilities.register(Capability("web_fetch", "Fetch public internet content. Read-only.", RiskLevel.READ, runtime.web_fetch))
         self.capabilities.register(Capability("github_list_directory", "List a GitHub repository directory. Read-only.", RiskLevel.READ, runtime.github_list_directory))
@@ -62,7 +65,33 @@ class ReplyPipeline:
         self.capabilities.register(Capability("github_create_pr", "Create a draft GitHub pull request. Never merges it.", RiskLevel.WRITE, runtime.github_create_pr))
         self.capabilities.register(Capability("railway_health", "Check the BUD/Railway HTTP health endpoint. Read-only.", RiskLevel.READ, runtime.railway_health))
 
+    async def start(self) -> None:
+        if self._mcp_started:
+            return
+        await self.mcp_manager.start()
+        for tool in self.mcp_manager.tools():
+            async def execute(args: dict, exposed_name: str = tool.exposed_name) -> str:
+                return await self.mcp_manager.call_tool(exposed_name, args)
+
+            self.capabilities.register(
+                Capability(
+                    tool.exposed_name,
+                    tool.description,
+                    tool.risk,
+                    execute,
+                )
+            )
+        if hasattr(self.openai, "set_chat_tools"):
+            self.openai.set_chat_tools(CHAT_TOOLS + self.mcp_manager.tool_definitions())
+        self._mcp_started = True
+
+    async def stop(self) -> None:
+        if self._mcp_started:
+            await self.mcp_manager.stop()
+            self._mcp_started = False
+
     async def process_batch(self, chat_id: int, batch: list[Message]) -> ChatResult:
+        await self.start()
         query = "\n".join(message.content for message in batch if message.content)
         memory = await self.memory.retrieve(chat_id, query)
         instructions = build_instructions(memory, query=query)
