@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     ai_request_timeout_s: float = Field(default=60.0, gt=1, le=300)
     ai_max_tool_rounds: int = Field(default=8, ge=1, le=20)
     capability_timeout_s: float = Field(default=15.0, gt=1, le=60)
+
+    # Claudex: Hermes remains the coordinator; the reviewer is explicitly
+    # selected and receives no tools or write capabilities.
+    claudex_enabled: bool = True
+    claudex_reviewer_provider: str = "gemini"
+    claudex_reviewer_model: str = ""
+    claudex_max_review_rounds: int = Field(default=2, ge=1, le=5)
     github_token: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 
