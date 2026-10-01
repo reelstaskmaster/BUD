@@ -246,8 +246,7 @@ class MCPManager:
                 text = getattr(item, "text", None)
                 if text is not None:
                     chunks.append(str(text))
-            rendered = "
-".join(chunks).strip()
+            rendered = "\\n".join(chunks).strip()
             if not rendered:
                 rendered = str(result)
 
