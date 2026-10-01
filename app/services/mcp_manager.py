@@ -339,16 +339,6 @@ def _resolve_env_map(value: Any, field_name: str) -> dict[str, str]:
     return result
 
 
-def _tool_risk(config: dict[str, Any], tool_name: str) -> RiskLevel:
-    destructive = {str(item) for item in config.get("destructive_tools", []) or []}
-    write = {str(item) for item in config.get("write_tools", []) or []}
-    if tool_name in destructive:
-        return RiskLevel.DESTRUCTIVE
-    if tool_name in write:
-        return RiskLevel.WRITE
-    return RiskLevel.READ
-
-
-def _tool_description(server: str, tool: str, description: Any) -> str:
+def _tool_risk(\n    read: set[str],\n    write: set[str],\n    destructive: set[str],\n    tool_name: str,\n) -> RiskLevel:\n    if tool_name in destructive:\n        return RiskLevel.DESTRUCTIVE\n    if tool_name in write:\n        return RiskLevel.WRITE\n    if tool_name in read:\n        return RiskLevel.READ\n    raise ValueError(f"MCP tool has no explicit risk classification: {tool_name}")\n\n\ndef _tool_description(server: str, tool: str, description: Any) -> str:
     base = str(description or f"MCP tool {tool} exposed by {server}.")
     return f"[MCP:{server}] {base}"[:4000]
