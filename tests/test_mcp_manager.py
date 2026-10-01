@@ -75,3 +75,4 @@ async def test_render_result_sanitizes_length():
         content=[SimpleNamespace(text="x" * 5000)],
     )
     assert len(manager._render_result(result)) == 1000
+\n\ndef test_server_config_requires_explicit_allowlist_and_classification():\n    settings = Settings()\n    settings.mcp_servers_json = json.dumps([\n        {\n            "name": "demo",\n            "transport": "streamable_http",\n            "url": "https://example.com/mcp",\n        }\n    ])\n    manager = MCPManager(settings)\n    with pytest.raises(ValueError, match="allowed_tools"):\n        manager._parse_configs()  # config shape is accepted here; connection enforces the trust boundary\n
