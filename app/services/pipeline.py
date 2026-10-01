@@ -11,6 +11,7 @@ from app.config import Settings
 from app.db import repositories as repo
 from app.db.models import Message
 from app.services.agent_loop import AgentLoop
+from app.services.claudex_loop import ClaudexLoop
 from app.services.context_manager import ContextManager
 from app.services.memory import MemoryService
 from app.services.openai_client import ChatResult, OpenAIInputMessage, OpenAIService
@@ -35,7 +36,15 @@ class ReplyPipeline:
         self.openai = openai
         self.memory = memory
         self.settings = settings
-        self.agent_loop = AgentLoop()
+        self.agent_loop = AgentLoop(
+            ClaudexLoop(
+                openai,
+                enabled=settings.claudex_enabled,
+                reviewer_provider=settings.claudex_reviewer_provider,
+                reviewer_model=settings.claudex_reviewer_model,
+                max_rounds=settings.claudex_max_review_rounds,
+            )
+        )
         self.context_manager = ContextManager(settings.context_max_chars)
         self.capabilities = CapabilityRegistry()
         self.capability_executor = CapabilityExecutor(self.capabilities)
