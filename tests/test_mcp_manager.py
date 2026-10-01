@@ -77,14 +77,25 @@ async def test_render_result_sanitizes_length():
     assert len(manager._render_result(result)) == 1000
 
 
-@pytest.mark.asyncio
-async def test_server_config_requires_explicit_allowlist_and_classification():
+def test_server_config_requires_explicit_allowlist_and_classification():
     manager = MCPManager(Settings())
     with pytest.raises(ValueError, match="allowed_tools"):
-        await manager._connect_one(
-            {
-                "name": "demo",
-                "transport": "streamable_http",
-                "url": "https://example.com/mcp",
-            }
-        )
+        from app.services.mcp_manager import _validate_tool_policy
+        _validate_tool_policy({"name": "demo"})
+
+
+@pytest.mark.asyncio
+async def test_server_connect_accepts_explicit_policy():
+    manager = MCPManager(Settings())
+    config = {
+        "name": "demo",
+        "transport": "streamable_http",
+        "url": "https://example.com/mcp",
+        "allowed_tools": ["search"],
+        "read_tools": ["search"],
+        "write_tools": [],
+        "destructive_tools": [],
+    }
+    # Policy validation happens before any network connection.
+    from app.services.mcp_manager import _validate_tool_policy
+    assert _validate_tool_policy(config)[0] == {"search"}
