@@ -269,22 +269,43 @@ def _validate_http_endpoint(url: str) -> None:
         raise ValueError("MCP endpoint credentials must not be embedded in the URL")
 
     host = parsed.hostname.lower()
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if parsed.scheme == "http" and literal.is_loopback:
+            return
+        if (
+            literal.is_private
+            or literal.is_loopback
+            or literal.is_link_local
+            or literal.is_multicast
+            or literal.is_reserved
+            or literal.is_unspecified
+        ):
+            raise ValueError("MCP endpoint uses a non-public network address")
+        if parsed.scheme == "http":
+            raise ValueError("MCP public HTTP endpoints must use HTTPS")
+        return
+
     if parsed.scheme == "http" and host not in _BLOCKED_HOSTS:
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError:
-            raise ValueError("MCP public HTTP endpoints must use HTTPS")
-        if not address.is_loopback:
-            raise ValueError("MCP public HTTP endpoints must use HTTPS")
+        raise ValueError("MCP public HTTP endpoints must use HTTPS")
+
+    if host in _BLOCKED_HOSTS:
+        return
 
     # Prevent DNS rebinding/SSRF through an HTTPS hostname that resolves to
     # loopback, private, link-local, multicast, reserved, or unspecified IPs.
-    if host in _BLOCKED_HOSTS:
-        return
     try:
         addresses = {
             ipaddress.ip_address(item[4][0])
-            for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+            for item in socket.getaddrinfo(
+                host,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
         }
     except socket.gaierror as exc:
         raise ValueError("MCP endpoint hostname could not be resolved") from exc
@@ -300,7 +321,6 @@ def _validate_http_endpoint(url: str) -> None:
         for address in addresses
     ):
         raise ValueError("MCP endpoint resolves to a non-public network address")
-
 
 def _resolve_env_map(value: Any, field_name: str) -> dict[str, str]:
     if value is None:
