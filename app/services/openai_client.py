@@ -508,6 +508,74 @@ class OpenAIService:
             return []
         return [item for item in payload.get("items", []) if isinstance(item, dict)]
 
+    async def independent_text(
+        self,
+        *,
+        system: str,
+        user: str,
+        provider: str,
+        model: str | None = None,
+    ) -> str:
+        """Run a no-tools review turn through an explicitly selected provider.
+
+        This intentionally has no provider fallback: Claudex review must remain
+        independently attributable to the configured reviewer.
+        """
+        provider = provider.strip().lower()
+        keys = self._configured_keys(provider)
+        if not keys:
+            raise AIProviderError(f"Claudex reviewer provider is not configured: {provider}")
+
+        if provider == "freellmapi":
+            response = await self._freellmapi_client.chat.completions.create(
+                model=model or self.settings.freellmapi_chat_model,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                tools=[],
+            )
+            return (response.choices[0].message.content or "").strip()
+
+        if provider == "openrouter":
+            response = await self._openrouter_client(0).chat.completions.create(
+                model=model or self.settings.openrouter_chat_model,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                tools=[],
+            )
+            return (response.choices[0].message.content or "").strip()
+
+        if provider == "openai":
+            response = await self._openai_client(0).responses.create(
+                model=model or self.settings.chat_model,
+                instructions=system,
+                input=[{"role": "user", "content": user}],
+            )
+            return (response.output_text or "").strip()
+
+        if provider == "gemini":
+            api_key = keys[0]
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model or self.settings.gemini_chat_model}:generateContent"
+            )
+            payload = {
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+            }
+            async with httpx.AsyncClient(timeout=self.settings.ai_request_timeout_s) as http:
+                response = await http.post(
+                    url,
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json=payload,
+                )
+            if response.status_code >= 400:
+                raise AIProviderError(
+                    f"Claudex reviewer provider gemini failed with HTTP {response.status_code}."
+                )
+            data = response.json()
+            parts = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+            return "".join(str(part.get("text") or "") for part in parts).strip()
+
+        raise AIProviderError(f"Unsupported Claudex reviewer provider: {provider}")
+
     async def chat(
         self,
         *,
