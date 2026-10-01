@@ -116,7 +116,26 @@ class AgentLoop:
             last_result = result
             previous = result.text
             if result.text.strip() and "AGENT_STATUS: DONE" in result.text:
-                return ChatResult(self._finalize_text(result.text))
+                final_text = self._finalize_text(result.text)
+                if self.claudex is not None:
+                    try:
+                        inspection = await self.claudex.inspect_result(
+                            query=query,
+                            plan=plan,
+                            result=final_text,
+                        )
+                    except Exception as exc:
+                        return ChatResult(
+                            final_text
+                            + "\n\nClaudex final inspection failed; completion is not independently verified. "
+                            + f"Inspector error: {exc}"
+                        )
+                    if inspection.verdict != "APPROVED":
+                        return ChatResult(
+                            final_text + "\n\n" + self._format_claudex_block("final result", inspection)
+                        )
+                    final_text += "\n\nClaudex independent final inspection: APPROVED."
+                return ChatResult(final_text)
 
         if last_result is not None and last_result.text.strip():
             final_text = self._finalize_text(last_result.text)
