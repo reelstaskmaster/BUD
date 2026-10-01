@@ -97,7 +97,7 @@ async def test_agent_loop_uses_claudex_before_execution_and_after_finalize() -> 
     )
     assert "Claudex independent final inspection: APPROVED." in result.text
     assert claudex.plan_calls == 1
-    assert claudex.inspect_calls == 0
+    assert claudex.inspect_calls == 1
     assert calls == 1
 
 
