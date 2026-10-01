@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from app.services.claudex_loop import ClaudexLoop, ClaudexReview
 from app.services.openai_client import ChatResult
 from app.services.planner import Planner
 
@@ -23,8 +24,9 @@ class AgentLoop:
         "провести аудит", "сделай полностью",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, claudex: ClaudexLoop | None = None) -> None:
         self.planner = Planner()
+        self.claudex = claudex
 
     def decide(self, query: str) -> AgentDecision:
         normalized = query.casefold()
@@ -62,6 +64,16 @@ class AgentLoop:
         )
 
     @staticmethod
+    def _format_claudex_block(stage: str, review: ClaudexReview) -> str:
+        findings = "\n".join(f"- {item}" for item in review.findings)
+        detail = f"\n{findings}" if findings else ""
+        return (
+            f"Claudex {stage} review: {review.verdict}. "
+            f"{review.summary or 'Independent review did not approve the result.'}"
+            f"{detail}"
+        )
+
+    @staticmethod
     def _finalize_text(text: str) -> str:
         marker = "AGENT_STATUS: DONE"
         return text.split(marker, 1)[0].rstrip() if marker in text else text
@@ -78,6 +90,24 @@ class AgentLoop:
             return await executor(instructions)
 
         base = self.augment_instructions(instructions, query)
+        plan = self.planner.render(self.planner.build(query))
+
+        if self.claudex is not None:
+            try:
+                review = await self.claudex.review_plan(query=query, plan=plan)
+            except Exception as exc:
+                return ChatResult(
+                    "Claudex review could not be completed; the task was not executed as verified. "
+                    f"Reviewer error: {exc}"
+                )
+            if review.verdict != "APPROVED":
+                return ChatResult(self._format_claudex_block("plan", review))
+            base += (
+                "\n\nClaudex independent plan review: APPROVED. "
+                "Proceed only within the reviewed plan. "
+                "Do not claim verification beyond observed evidence."
+            )
+
         last_result: ChatResult | None = None
         previous = ""
 
@@ -86,10 +116,48 @@ class AgentLoop:
             last_result = result
             previous = result.text
             if result.text.strip() and "AGENT_STATUS: DONE" in result.text:
-                return ChatResult(self._finalize_text(result.text))
+                final_text = self._finalize_text(result.text)
+                if self.claudex is not None:
+                    try:
+                        inspection = await self.claudex.inspect_result(
+                            query=query,
+                            plan=plan,
+                            result=final_text,
+                        )
+                    except Exception as exc:
+                        return ChatResult(
+                            final_text
+                            + "\n\nClaudex final inspection failed; completion is not independently verified. "
+                            + f"Inspector error: {exc}"
+                        )
+                    if inspection.verdict != "APPROVED":
+                        return ChatResult(
+                            final_text + "\n\n" + self._format_claudex_block("final result", inspection)
+                        )
+                    final_text += "\n\nClaudex independent final inspection: APPROVED."
+                return ChatResult(final_text)
 
         if last_result is not None and last_result.text.strip():
-            return ChatResult(self._finalize_text(last_result.text))
+            final_text = self._finalize_text(last_result.text)
+            if self.claudex is not None:
+                try:
+                    inspection = await self.claudex.inspect_result(
+                        query=query,
+                        plan=plan,
+                        result=final_text,
+                    )
+                except Exception as exc:
+                    return ChatResult(
+                        final_text
+                        + "\n\nClaudex final inspection failed; completion is not independently verified. "
+                        + f"Inspector error: {exc}"
+                    )
+                if inspection.verdict != "APPROVED":
+                    return ChatResult(
+                        final_text + "\n\n" + self._format_claudex_block("final result", inspection)
+                    )
+                final_text += "\n\nClaudex independent final inspection: APPROVED."
+            return ChatResult(final_text)
         return ChatResult(
             "Не удалось подтвердить завершение задачи после ограниченного цикла агента."
         )
