@@ -1,0 +1,10 @@
+{
+  "name": "chrome-devtools",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["--yes", "chrome-devtools-mcp@1.10.1", "--slim", "--headless", "--no-usage-statistics"],
+  "allowed_tools": ["navigate_page", "take_screenshot", "list_network_requests", "list_console_messages"],
+  "read_tools": ["navigate_page", "take_screenshot", "list_network_requests", "list_console_messages"],
+  "write_tools": [],
+  "destructive_tools": []
+}
