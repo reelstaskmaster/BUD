@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     mcp_max_output_chars: int = Field(default=20_000, ge=1_000, le=20_000)
     mcp_stdio_allowed_commands: str = ""
 
+    # Hermes-style local skill registry. Skills are read-only procedures;
+    # they never execute code by themselves.
+    skills_enabled: bool = True
+    skills_max_instructions: int = Field(default=3, ge=1, le=8)
+
     github_token: str = ""
     database_url: str = "postgresql+asyncpg://telegpt:telegpt@localhost:5433/telegpt"
 

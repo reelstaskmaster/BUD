@@ -161,11 +161,11 @@ class MCPManager:
                 # The high-level Client accepts a URL but does not expose custom
                 # headers. Use the SDK transport directly when auth is configured.
                 from mcp.client.streamable_http import streamable_http_client
-                import httpx2
+                import httpx
 
-                http_client = httpx2.AsyncClient(
+                http_client = httpx.AsyncClient(
                     headers=headers,
-                    timeout=httpx2.Timeout(
+                    timeout=httpx.Timeout(
                         self.timeout_s,
                         connect=min(self.timeout_s, 30.0),
                         read=max(self.timeout_s, 30.0),
