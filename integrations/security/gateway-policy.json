@@ -1,0 +1,12 @@
+{
+  "policy_version": 1,
+  "default": "deny",
+  "fail_closed": true,
+  "require_explicit_tool_allowlist": true,
+  "require_risk_classification": true,
+  "block_prompt_injection_signals": true,
+  "block_secret_exfiltration_signals": true,
+  "block_unapproved_egress": true,
+  "audit_tool_calls": true,
+  "note": "Policy model for MCP Agent Security Gateway integration; implementation remains opt-in until reviewed."
+}
