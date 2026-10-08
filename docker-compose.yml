@@ -2,15 +2,15 @@ services:
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: telegpt
-      POSTGRES_PASSWORD: telegpt
-      POSTGRES_DB: telegpt
+      POSTGRES_USER: ${POSTGRES_USER:-telegpt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-telegpt}
     ports:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U telegpt -d telegpt"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-telegpt} -d ${POSTGRES_DB:-telegpt}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -24,7 +24,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://telegpt:telegpt@db:5432/telegpt
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-telegpt}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-telegpt}
     restart: unless-stopped
 
 volumes:
