@@ -1,0 +1,10 @@
+{
+  "name": "agent-memory-mcp",
+  "transport": "stdio",
+  "source": "ipiton/agent-memory-mcp",
+  "allowed_tools": [],
+  "read_tools": [],
+  "write_tools": [],
+  "destructive_tools": [],
+  "activation": "blocked_until_path_policy_review"
+}
