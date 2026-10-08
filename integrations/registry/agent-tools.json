@@ -1,0 +1,70 @@
+{
+  "policy_version": 1,
+  "mode": "reviewed_catalog",
+  "activation": "explicit",
+  "components": [
+    {
+      "id": "chrome-devtools-mcp",
+      "source": "ChromeDevTools/chrome-devtools-mcp",
+      "version": "1.10.1",
+      "role": "browser_observability",
+      "status": "configured",
+      "risk": "medium",
+      "activation_required": true
+    },
+    {
+      "id": "aio-sandbox",
+      "source": "agent-infra/sandbox",
+      "role": "isolated_execution",
+      "status": "review_required",
+      "risk": "high",
+      "activation_required": true,
+      "notes": "Upstream examples use seccomp=unconfined; do not deploy that configuration unchanged."
+    },
+    {
+      "id": "mcp-agent-security-gateway",
+      "source": "poojakira/mcp-agent-security-gateway",
+      "role": "tool_call_policy",
+      "status": "review_required",
+      "risk": "medium",
+      "activation_required": true,
+      "notes": "Research prototype; application-layer enforcement, not an OS/network firewall."
+    },
+    {
+      "id": "agentgateway",
+      "source": "agentgateway/agentgateway",
+      "role": "gateway_governance",
+      "status": "review_required",
+      "risk": "high",
+      "activation_required": true,
+      "notes": "Potential overlap with FreeLLMAPI; evaluate as a governance/proxy layer before replacing anything."
+    },
+    {
+      "id": "agent-memory",
+      "source": "vartiainen1/agent-memory",
+      "role": "governed_project_memory",
+      "status": "review_required",
+      "risk": "low",
+      "activation_required": true,
+      "notes": "Human trust promotion and append-only history are attractive for self-improving skills."
+    },
+    {
+      "id": "agent-memory-mcp",
+      "source": "ipiton/agent-memory-mcp",
+      "role": "repo_context_memory",
+      "status": "review_required",
+      "risk": "medium",
+      "activation_required": true,
+      "notes": "Local SQLite, repo-aware retrieval and MCP; must be allowlisted to project paths only."
+    },
+    {
+      "id": "flue",
+      "source": "withastro/flue",
+      "role": "agent_harness_reference",
+      "status": "review_required",
+      "risk": "medium",
+      "activation_required": true,
+      "notes": "Use selectively as an architecture reference; do not replace Hermes with a second agent runtime."
+    }
+  ]
+}
