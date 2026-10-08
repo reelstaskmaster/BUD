@@ -1,0 +1,29 @@
+{
+  "policy_version": 1,
+  "id": "agent-zero",
+  "source": "agent0ai/agent-zero",
+  "role": "isolated_execution_specialist",
+  "status": "review_required",
+  "risk": "high",
+  "activation_required": true,
+  "coordinator": "hermes",
+  "model_gateway": "freellmapi",
+  "capabilities": [
+    "browser",
+    "terminal",
+    "files",
+    "skills",
+    "memory",
+    "subagents",
+    "mcp",
+    "a2a"
+  ],
+  "required_boundaries": {
+    "host_filesystem": "deny_by_default",
+    "network_egress": "deny_by_default",
+    "production_secrets": "deny",
+    "main_branch_write": "deny",
+    "ui_exposure": "loopback_or_private_only"
+  },
+  "notes": "Use as a subordinate execution specialist only. Do not introduce a second coordinator."
+}
