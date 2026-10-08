@@ -40,8 +40,8 @@ class SkillRegistry:
         scored.sort(key=lambda item: (-item[0], item[1].name))
         return [skill for _, skill in scored[:limit]]
 
-    def render_for_query(self, query: str) -> str:
-        selected = self.matching(query)
+    def render_for_query(self, query: str, limit: int = 3) -> str:
+        selected = self.matching(query, limit=limit)
         if not selected:
             return ""
         blocks = []
